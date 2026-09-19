@@ -1,0 +1,7 @@
+# Contains your Tuya local key and device IPs. Never commit it.
+config.yaml
+
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/

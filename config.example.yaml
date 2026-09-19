@@ -1,0 +1,23 @@
+# Copy to config.yaml and fill in your own values.
+server:
+  host: 0.0.0.0
+  port: 8080
+
+devices:
+  - id: strip
+    name: Desk Strip
+    driver: wled
+    host: 192.168.1.50        # WLED device IP (set a DHCP reservation for it)
+
+  - id: tv
+    name: TV Backlight
+    driver: mrstar
+    address: "AA:BB:CC:DD:EE:FF"   # run `python -m crib.scan` to find this
+
+  - id: ceiling
+    name: Room Lights
+    driver: tuya
+    device_id: "abcdef1234567890"  # from tinytuya wizard
+    address: 192.168.1.60
+    local_key: "0123456789abcdef"
+    version: 3.3

@@ -1,0 +1,8 @@
+{
+  "name": "Crib Lighting",
+  "short_name": "Crib",
+  "display": "standalone",
+  "background_color": "#0a0a0f",
+  "theme_color": "#0a0a0f",
+  "start_url": "/"
+}

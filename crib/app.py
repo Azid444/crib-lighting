@@ -1,0 +1,142 @@
+"""Local HTTP + WebSocket API and the phone UI. Nothing leaves your LAN."""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from contextlib import asynccontextmanager
+
+import uvicorn
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from .effects import EFFECTS
+from .room import Room
+
+log = logging.getLogger(__name__)
+CONFIG = os.environ.get("CRIB_CONFIG", "config.yaml")
+WEB = os.path.join(os.path.dirname(__file__), "web")
+
+room: Room | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global room
+    room = Room.from_file(CONFIG)
+    await room.connect_all()
+    yield
+    await room.disconnect_all()
+
+
+app = FastAPI(title="crib-lighting", lifespan=lifespan)
+
+
+def get_room() -> Room:
+    if room is None:
+        raise HTTPException(503, "room not ready")
+    return room
+
+
+class LightBody(BaseModel):
+    on: bool | None = None
+    brightness: int | None = Field(None, ge=0, le=255)
+    color: tuple[int, int, int] | None = None
+
+
+class EffectBody(BaseModel):
+    name: str
+    bpm: float | None = Field(None, gt=20, le=300)
+    hz: float | None = Field(None, gt=0, le=25)
+    speed: float | None = None
+    color: tuple[int, int, int] | None = None
+    brightness: int | None = Field(None, ge=0, le=255)
+
+
+@app.get("/api/state")
+async def state() -> dict:
+    return get_room().snapshot()
+
+
+@app.post("/api/light/{light_id}")
+async def set_light(light_id: str, body: LightBody) -> dict:
+    r = get_room()
+    if light_id not in r.lights:
+        raise HTTPException(404, f"no light {light_id!r}")
+    # A manual touch means the user is taking over from the effect.
+    await r.engine.stop()
+    await r.lights[light_id].set(
+        throttle=False, **body.model_dump(exclude_none=True)
+    )
+    return r.snapshot()
+
+
+@app.post("/api/scene/{name}")
+async def scene(name: str) -> dict:
+    r = get_room()
+    try:
+        await r.apply_scene(name)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+    return r.snapshot()
+
+
+@app.get("/api/effects")
+async def list_effects() -> dict:
+    return {"effects": sorted(EFFECTS)}
+
+
+@app.post("/api/effect")
+async def effect(body: EffectBody) -> dict:
+    r = get_room()
+    opts = body.model_dump(exclude_none=True)
+    name = opts.pop("name")
+    try:
+        await r.engine.start(name, **opts)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+    return r.snapshot()
+
+
+@app.delete("/api/effect")
+async def stop_effect() -> dict:
+    r = get_room()
+    await r.engine.stop()
+    return r.snapshot()
+
+
+@app.websocket("/ws")
+async def ws(socket: WebSocket) -> None:
+    """Pushes state to every open phone so two devices never disagree."""
+    await socket.accept()
+    try:
+        while True:
+            await socket.send_json(get_room().snapshot())
+            await asyncio.sleep(1.0)
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+
+
+app.mount("/static", StaticFiles(directory=WEB), name="static")
+
+
+@app.get("/")
+async def index() -> FileResponse:
+    return FileResponse(os.path.join(WEB, "index.html"))
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    import yaml
+
+    with open(CONFIG) as fh:
+        cfg = yaml.safe_load(fh).get("server", {})
+    uvicorn.run(
+        app, host=cfg.get("host", "0.0.0.0"), port=int(cfg.get("port", 8080))
+    )
+
+
+if __name__ == "__main__":
+    main()
