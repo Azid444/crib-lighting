@@ -21,3 +21,10 @@ devices:
     address: 192.168.1.60
     local_key: "0123456789abcdef"
     version: 3.3
+
+# Sound-reactive rave (optional). Leave `device` unset to use the default
+# input. To react to what the PC is *playing* rather than the room, point this
+# at a loopback device -- run `python -m crib.audio` to list them by index.
+audio:
+  device: null
+  sensitivity: 1.35   # lower = more beats detected, higher = only big hits

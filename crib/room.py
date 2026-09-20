@@ -6,6 +6,7 @@ import logging
 
 import yaml
 
+from .audio import Audio
 from .drivers import Light, build
 from .effects import Engine
 
@@ -39,7 +40,12 @@ class Room:
                 log.error("skipping device %s: %s", spec.get("id", "?"), exc)
                 continue
             self.lights[light.id] = light
-        self.engine = Engine(self.lights)
+        audio_cfg = config.get("audio", {}) or {}
+        self.audio = Audio(
+            device=audio_cfg.get("device"),
+            sensitivity=float(audio_cfg.get("sensitivity", 1.35)),
+        )
+        self.engine = Engine(self.lights, audio=self.audio)
 
     @classmethod
     def from_file(cls, path: str) -> "Room":
@@ -59,6 +65,7 @@ class Room:
 
     async def disconnect_all(self) -> None:
         await self.engine.stop()
+        self.audio.stop()
         await asyncio.gather(
             *(l.disconnect() for l in self.lights.values()), return_exceptions=True
         )
@@ -82,4 +89,5 @@ class Room:
             "lights": [l.snapshot() for l in self.lights.values()],
             "effect": self.engine.running,
             "scenes": sorted(SCENES),
+            "audio": self.audio.snapshot(),
         }

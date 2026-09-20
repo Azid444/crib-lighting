@@ -29,9 +29,12 @@ def hsv(h: float, s: float = 1.0, v: float = 1.0) -> RGB:
 
 class Effect:
     name = "effect"
+    # Effects that set this get an Audio analyser started for them.
+    needs_audio = False
 
     def __init__(self, **opts) -> None:
         self.opts = opts
+        self.audio = None  # set by the engine when needs_audio is True
 
     def frame(self, t: float, light: Light) -> dict | None:
         """Target state for `light` at `t` seconds in, or None to leave it be."""
@@ -125,16 +128,73 @@ class Rave(Effect):
         return {"on": True, "brightness": bri, "color": self._color}
 
 
+class SoundRave(Effect):
+    """Rave driven by what the room is actually hearing.
+
+    Bass sets brightness, a detected kick slams a new colour, and treble
+    spikes flash white — so the lights follow the track instead of a metronome.
+    Falls back to the fixed-tempo Rave if no audio is coming in, so the button
+    still does something when the loopback device is not set up.
+    """
+
+    name = "sound"
+    needs_audio = True
+
+    def __init__(self, **opts) -> None:
+        super().__init__(**opts)
+        self._color: RGB = hsv(0.0)
+        self._hue = 0.0
+        self._fallback = Rave(**opts)
+        self._flash_until = 0.0
+        self._seen_beats = 0
+        self._seen_spikes = 0
+
+    def frame(self, t: float, light: Light) -> dict | None:
+        if not light.caps.can_strobe:
+            return {"on": False}
+        a = self.audio
+        if a is None or not a.running:
+            return self._fallback.frame(t, light)
+
+        gain = float(self.opts.get("gain", 1.0))
+
+        # Compare counters rather than reading the one-block `beat` flag, which
+        # this loop ticks too slowly to catch reliably.
+        beats = getattr(a, "beats", 0)
+        if beats != self._seen_beats:
+            self._seen_beats = beats
+            # Jump a large, irregular step around the wheel so consecutive
+            # beats never land on similar colours.
+            self._hue = (self._hue + 0.37 + random.random() * 0.2) % 1.0
+            self._color = hsv(self._hue)
+
+        # Treble transients (hats, snare) punch a short white flash. The
+        # analyser decides what counts as a spike relative to the track's own
+        # recent treble, so this works at any volume.
+        spikes = getattr(a, "spikes", 0)
+        if spikes != self._seen_spikes:
+            self._seen_spikes = spikes
+            if t > self._flash_until:
+                self._flash_until = t + 0.06
+        if t < self._flash_until:
+            return {"on": True, "brightness": 255, "color": (255, 255, 255)}
+
+        loud = min(1.0, a.bass * 12.0 * gain)
+        bri = round(30 + loud * 225)
+        return {"on": True, "brightness": bri, "color": self._color}
+
+
 EFFECTS: dict[str, type[Effect]] = {
-    e.name: e for e in (Solid, Rainbow, Breathe, Strobe, Rave)
+    e.name: e for e in (Solid, Rainbow, Breathe, Strobe, Rave, SoundRave)
 }
 
 
 class Engine:
     """Runs at most one effect at a time over a set of lights."""
 
-    def __init__(self, lights: dict[str, Light]) -> None:
+    def __init__(self, lights: dict[str, Light], audio=None) -> None:
         self.lights = lights
+        self.audio = audio
         self.current: Effect | None = None
         self._task: asyncio.Task | None = None
 
@@ -146,7 +206,16 @@ class Engine:
         if name not in EFFECTS:
             raise ValueError(f"unknown effect {name!r}; have {sorted(EFFECTS)}")
         await self.stop()
-        self.current = EFFECTS[name](**opts)
+        effect = EFFECTS[name](**opts)
+        if effect.needs_audio and self.audio is not None:
+            effect.audio = self.audio
+            try:
+                self.audio.start()
+            except Exception as exc:
+                # No loopback device? Run anyway; the effect falls back to a
+                # fixed tempo rather than refusing to start.
+                log.warning("audio unavailable, using fixed tempo: %s", exc)
+        self.current = effect
         self._task = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
@@ -157,6 +226,8 @@ class Engine:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        if self.current is not None and self.current.needs_audio and self.audio:
+            self.audio.stop()
         self.current = None
 
     async def _run(self) -> None:

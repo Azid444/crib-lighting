@@ -83,6 +83,17 @@ async def scene(name: str) -> dict:
     return r.snapshot()
 
 
+@app.get("/api/audio/devices")
+async def audio_devices() -> dict:
+    """Input devices, so you can pick the loopback from the phone."""
+    from .audio import list_devices
+
+    try:
+        return {"devices": list_devices()}
+    except Exception as exc:
+        raise HTTPException(503, f"audio unavailable: {exc}")
+
+
 @app.get("/api/effects")
 async def list_effects() -> dict:
     return {"effects": sorted(EFFECTS)}

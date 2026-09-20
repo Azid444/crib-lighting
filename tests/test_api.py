@@ -78,3 +78,20 @@ def test_ui_and_manifest_are_served(client):
 def test_websocket_pushes_state(client):
     with client.websocket_connect("/ws") as ws:
         assert "lights" in ws.receive_json()
+
+
+def test_state_includes_audio(client):
+    audio = client.get("/api/state").json()["audio"]
+    assert audio["running"] is False and "bpm" in audio
+
+
+def test_sound_effect_starts_without_a_sound_card(client):
+    """The sound button must not 500 on a machine with no loopback."""
+    r = client.post("/api/effect", json={"name": "sound"})
+    assert r.status_code == 200 and r.json()["effect"] == "sound"
+    client.delete("/api/effect")
+
+
+def test_ui_exposes_sound_controls(client):
+    html = client.get("/").text
+    assert "SOUND REACTIVE" in html and 'id="meter"' in html
