@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import socket
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -332,6 +333,13 @@ async def index():
     return FileResponse(os.path.join(WEB, "index.html"))
 
 
+def port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+    """Whether something already holds the port, checked without taking it."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex((host, port)) == 0
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     from .setup import load_config
@@ -342,6 +350,19 @@ def main() -> None:
     host, port = cfg.get("host", "0.0.0.0"), int(cfg.get("port", 8080))
     if not os.path.exists(CONFIG):
         log.info("no %s yet - open http://127.0.0.1:%d/setup", CONFIG, port)
+    if port_in_use(port):
+        # Setup installs a login task, so the usual cause is that it is
+        # already running -- which reads as a failure unless it is spelled out.
+        log.error("port %d is already in use, so this copy will not start.",
+                  port)
+        log.error("It is probably already running: open "
+                  "http://127.0.0.1:%d", port)
+        log.error("To restart it after an update:")
+        log.error("  Stop-ScheduledTask -TaskName crib-lighting; "
+                  "Start-ScheduledTask -TaskName crib-lighting")
+        raise SystemExit(1)
+    log.info("open http://127.0.0.1:%d on this PC, or http://<this pc>:%d "
+             "from your phone", port, port)
     uvicorn.run(app, host=host, port=port)
 
 

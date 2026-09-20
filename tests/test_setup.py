@@ -309,3 +309,39 @@ def test_wizard_offers_exactly_the_protocols_the_driver_implements():
     page = pathlib.Path("crib/web/setup.html").read_text()
     listed = re.search(r"const PROTOCOLS = \[(.*?)\];", page, re.S).group(1)
     assert re.findall(r"'([a-z_]+)'", listed) == list(MrStarLight.PROTOCOLS)
+
+
+def test_main_refuses_to_start_twice_on_one_port(tmp_path, monkeypatch, caplog):
+    """The login task already holds the port; say so instead of a winsock code."""
+    import crib.app as appmod
+
+    monkeypatch.setattr(appmod, "CONFIG", str(tmp_path / "missing.yaml"))
+    monkeypatch.setattr(appmod, "port_in_use", lambda port, host="127.0.0.1": True)
+    monkeypatch.setattr(appmod.uvicorn, "run",
+                        lambda *a, **k: pytest.fail("should not have started"))
+    with caplog.at_level("ERROR"), pytest.raises(SystemExit):
+        appmod.main()
+    assert "already running" in caplog.text
+    assert "crib-lighting" in caplog.text
+
+
+def test_port_in_use_is_false_for_a_free_port():
+    import socket
+
+    from crib.app import port_in_use
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        free = s.getsockname()[1]
+    assert port_in_use(free) is False
+
+
+def test_port_in_use_is_true_for_a_bound_port():
+    import socket
+
+    from crib.app import port_in_use
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        s.listen(1)
+        assert port_in_use(s.getsockname()[1]) is True
