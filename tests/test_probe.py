@@ -136,3 +136,74 @@ def test_driver_defaults_when_no_char_is_given():
 
     assert MrStarLight("tv", "TV", "AA:BB", protocol="lednet")._char == LEDNET
     assert MrStarLight("tv", "TV", "AA:BB")._char == TRIONES
+
+
+# --- GATT inspection ------------------------------------------------------
+
+from crib.probe import writable_candidates
+
+CHARS = [
+    {"uuid": "00002a00-0000-1000-8000-00805f9b34fb", "writable": False,
+     "properties": ["read"]},
+    {"uuid": "0000abcd-0000-1000-8000-00805f9b34fb", "writable": True,
+     "properties": ["write"]},
+    {"uuid": TRIONES, "writable": True, "properties": ["write-without-response"]},
+]
+
+
+def test_known_characteristics_are_tried_first():
+    order = writable_candidates(CHARS)
+    assert order[0]["uuid"] == TRIONES
+    assert [c["uuid"] for c in order] == [TRIONES, "0000abcd-0000-1000-8000-00805f9b34fb"]
+
+
+def test_unwritable_characteristics_are_excluded():
+    """Flashing a read-only characteristic would only produce errors."""
+    assert all(c["writable"] for c in writable_candidates(CHARS))
+
+
+def test_a_device_with_nothing_writable_yields_nothing():
+    assert writable_candidates([CHARS[0]]) == []
+
+
+@pytest.mark.asyncio
+async def test_probe_reports_the_hunt_command_when_unrecognised(monkeypatch):
+    """A connectable device with odd characteristics must not be a dead end."""
+    async def fake_describe(address, timeout=15.0, attempts=2):
+        return {"address": address, "ok": True, "error": None,
+                "characteristics": CHARS[:2]}
+
+    monkeypatch.setattr("crib.probe.describe", fake_describe)
+    from crib.probe import probe
+
+    result = await probe("8C:26:AA:BA:A3:3F")
+    assert result["ok"] is False
+    assert "--hunt 8C:26:AA:BA:A3:3F" in result["error"]
+    assert "1 writable" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_probe_matches_a_known_characteristic(monkeypatch):
+    async def fake_describe(address, timeout=15.0, attempts=2):
+        return {"address": address, "ok": True, "error": None,
+                "characteristics": CHARS}
+
+    monkeypatch.setattr("crib.probe.describe", fake_describe)
+    from crib.probe import probe
+
+    result = await probe("AA:BB")
+    assert result["ok"] and result["char"] == TRIONES
+    assert result["protocol"] == "triones"
+
+
+@pytest.mark.asyncio
+async def test_probe_passes_through_a_connection_failure(monkeypatch):
+    async def fake_describe(address, timeout=15.0, attempts=2):
+        return {"address": address, "ok": False, "error": "Unreachable",
+                "characteristics": []}
+
+    monkeypatch.setattr("crib.probe.describe", fake_describe)
+    from crib.probe import probe
+
+    result = await probe("AA:BB")
+    assert result["ok"] is False and result["error"] == "Unreachable"

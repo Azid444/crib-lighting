@@ -275,7 +275,7 @@ WS     /ws                  state pushed to every open phone
 pip install pytest pytest-asyncio && python -m pytest
 ```
 
-161 tests, no hardware, sound card, or Spotify account required. Fake devices cover the
+167 tests, no hardware, sound card, or Spotify account required. Fake devices cover the
 engine and API, the MR-Star packet encoding is asserted byte by byte, and the
 beat detector is verified against synthesised tracks at known tempos. The
 WASAPI loopback selection is tested against a simulated Windows device tree,
@@ -314,6 +314,15 @@ which it is. There is a command-line version too:
 
 It skips rotating privacy addresses (phones, watches) and tries fixed ones
 first, so it usually lands on the light within a few attempts.
+
+If a device connects but uses a characteristic the sweep does not recognise,
+hunt it directly. This flashes every writable characteristic in turn and asks
+what you saw, then prints the exact config to use:
+
+```powershell
+.venv\Scripts\python.exe -m crib.probe --hunt 8C:26:AA:BA:A3:3F
+.venv\Scripts\python.exe -m crib.probe --dump 8C:26:AA:BA:A3:3F
+```
 
 **Older note on name matching.** These controllers are white-labelled
 and many advertise nothing that identifies them. The wizard lists every other

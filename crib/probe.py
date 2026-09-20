@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 log = logging.getLogger(__name__)
 
@@ -47,29 +48,93 @@ def rank(entry: dict) -> tuple:
     )
 
 
-async def probe(address: str, timeout: float = 12.0) -> dict:
-    """Connect and report whether this device can be driven as a light."""
+async def describe(address: str, timeout: float = 15.0,
+                   attempts: int = 2) -> dict:
+    """Full GATT table for one device.
+
+    "Unreachable" is common on first contact with these boards, so a failed
+    connection is retried before giving up.
+    """
     from bleak import BleakClient
 
-    result = {"address": address, "ok": False, "char": None,
-              "protocol": None, "error": None, "services": []}
+    last = None
+    for attempt in range(attempts):
+        try:
+            async with BleakClient(address, timeout=timeout) as client:
+                out = []
+                for service in client.services:
+                    for ch in service.characteristics:
+                        out.append({
+                            "uuid": ch.uuid.lower(),
+                            "service": service.uuid.lower(),
+                            "properties": list(ch.properties),
+                            "writable": bool(
+                                {"write", "write-without-response"}
+                                & set(ch.properties)),
+                        })
+                return {"address": address, "ok": True, "error": None,
+                        "characteristics": out}
+        except Exception as exc:
+            last = str(exc)
+            if attempt + 1 < attempts:
+                await asyncio.sleep(1.5)
+    return {"address": address, "ok": False, "error": last,
+            "characteristics": []}
+
+
+async def flash_with(address: str, char: str, protocol: str,
+                     seconds: float = 4.0) -> dict:
+    """Flash using one specific characteristic, whether or not it is known."""
+    from .drivers.mrstar import MrStarLight
+
+    light = MrStarLight("probe", "probe", address, protocol=protocol, char=char)
     try:
-        async with BleakClient(address, timeout=timeout) as client:
-            uuids = []
-            for service in client.services:
-                for ch in service.characteristics:
-                    uuids.append(ch.uuid.lower())
-                    writable = ("write" in ch.properties
-                                or "write-without-response" in ch.properties)
-                    if writable and ch.uuid.lower() in WRITE_CHARS and not result["char"]:
-                        result["char"] = ch.uuid.lower()
-                        result["protocol"] = WRITE_CHARS[ch.uuid.lower()]
-            result["services"] = uuids
-            result["ok"] = bool(result["char"])
-            if not result["ok"]:
-                result["error"] = "connected, but no known colour characteristic"
+        await light.connect()
+        deadline = asyncio.get_running_loop().time() + seconds
+        while asyncio.get_running_loop().time() < deadline:
+            for colour in ((255, 0, 0), (0, 255, 0), (0, 0, 255)):
+                await light.set(on=True, color=colour, brightness=255,
+                                throttle=False)
+                await asyncio.sleep(0.4)
+        return {"ok": True, "error": None}
     except Exception as exc:
-        result["error"] = str(exc)
+        return {"ok": False, "error": str(exc)}
+    finally:
+        try:
+            await light.disconnect()
+        except Exception:
+            pass
+
+
+def writable_candidates(chars: list[dict]) -> list[dict]:
+    """Writable characteristics, known ones first.
+
+    Vendors put colour control on all sorts of UUIDs, so anything writable is
+    worth a try once the known ones are exhausted.
+    """
+    known = [c for c in chars if c["writable"] and c["uuid"] in WRITE_CHARS]
+    rest = [c for c in chars if c["writable"] and c["uuid"] not in WRITE_CHARS]
+    return known + rest
+
+
+async def probe(address: str, timeout: float = 12.0) -> dict:
+    """Connect and report whether this device can be driven as a light."""
+    info = await describe(address, timeout=timeout)
+    result = {"address": address, "ok": False, "char": None, "protocol": None,
+              "error": info["error"],
+              "services": [c["uuid"] for c in info["characteristics"]]}
+    if not info["ok"]:
+        return result
+
+    for c in info["characteristics"]:
+        if c["writable"] and c["uuid"] in WRITE_CHARS:
+            result.update(char=c["uuid"], protocol=WRITE_CHARS[c["uuid"]],
+                          ok=True, error=None)
+            return result
+
+    writable = sum(1 for c in info["characteristics"] if c["writable"])
+    result["error"] = (f"connected, but no known colour characteristic "
+                       f"({writable} writable, try --hunt {address})")
     return result
 
 
@@ -124,7 +189,69 @@ async def find_the_light(candidates: list[dict], timeout: float = 12.0,
     return {"found": None, "tried": tried}
 
 
-async def _main() -> None:
+async def _dump(addresses: list[str]) -> None:
+    for address in addresses:
+        print(f"\n=== {address} ===")
+        info = await describe(address)
+        if not info["ok"]:
+            print(f"  could not connect: {info['error']}")
+            continue
+        for c in info["characteristics"]:
+            mark = "W" if c["writable"] else " "
+            known = "  <- known colour characteristic" if c["uuid"] in WRITE_CHARS else ""
+            print(f"  {mark} {c['uuid']}  {','.join(c['properties'])}{known}")
+        writable = writable_candidates(info["characteristics"])
+        print(f"  ({len(writable)} writable)")
+
+
+def _ask(question: str) -> bool:
+    try:
+        return input(question).strip().lower().startswith("y")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        raise SystemExit(0)
+
+
+async def _hunt(address: str) -> None:
+    """Try every writable characteristic until the user sees the light react."""
+    print(f"Connecting to {address}...")
+    info = await describe(address)
+    if not info["ok"]:
+        print(f"Could not connect: {info['error']}")
+        print("\nIf this is the right device, close its app on your phone --")
+        print("these boards allow only one connection at a time.")
+        return
+
+    options = [(c["uuid"], p) for c in writable_candidates(info["characteristics"])
+               for p in ("triones", "lednet")]
+    if not options:
+        print("This device has nothing writable, so it is not the light.")
+        return
+
+    print(f"\n{len(options)} things to try. Watch your TV backlight.\n")
+    for i, (char, protocol) in enumerate(options, 1):
+        print(f"[{i}/{len(options)}] {char[4:8]} as {protocol} ... ", end="", flush=True)
+        result = await flash_with(address, char, protocol)
+        if not result["ok"]:
+            print(f"failed ({result['error']})")
+            continue
+        print("sent")
+        if _ask("        Did your light flash? [y/N] "):
+            print(f"""
+Found it. Add this to the devices list in config.yaml:
+
+  - driver: mrstar
+    id: tv
+    name: TV Backlight
+    address: {address}
+    protocol: {protocol}
+    char: "{char}"
+""")
+            return
+    print("\nNothing on this device drove the light. Try another address.")
+
+
+async def _sweep() -> None:
     from bleak import BleakScanner
 
     print("Scanning...\n")
@@ -148,13 +275,36 @@ async def _main() -> None:
         print(f"\nFound it: {found['address']} ({found['protocol']})")
         print("Flashing it red, green, blue -- watch your light...")
         await flash(found["address"], found["protocol"], found["char"])
-        print("\nIf that was your TV backlight, paste this address into the")
-        print(f"setup page: {found['address']}")
+        print(f"\nIf that was your backlight, use address {found['address']}")
+        return
+
+    reachable = [t["address"] for t in result["tried"]
+                 if t["error"] and "no known colour" in t["error"]]
+    print("\nNone of them used a characteristic I recognise.")
+    if reachable:
+        print("\nThese connected fine, so one of them may still be it, just")
+        print("using an unusual characteristic. Try each in turn:\n")
+        for address in reachable:
+            print(f"    python -m crib.probe --hunt {address}")
+        print("\nThat flashes every writable characteristic and asks what you saw.")
     else:
-        print("\nNone of them accepted colour commands.")
-        print("The light may be connected to its phone app -- these boards")
-        print("allow only one connection at a time. Close it and retry.")
+        print("\nNothing connected. Close the light's app on your phone --")
+        print("these boards allow only one connection at a time.")
+
+
+def _cli() -> None:
+    args = sys.argv[1:]
+    if args and args[0] == "--dump":
+        asyncio.run(_dump(args[1:]))
+    elif args and args[0] == "--hunt":
+        if len(args) < 2:
+            sys.exit("usage: python -m crib.probe --hunt <address>")
+        asyncio.run(_hunt(args[1]))
+    elif args:
+        sys.exit("usage: python -m crib.probe [--dump ADDR...] [--hunt ADDR]")
+    else:
+        asyncio.run(_sweep())
 
 
 if __name__ == "__main__":
-    asyncio.run(_main())
+    _cli()
