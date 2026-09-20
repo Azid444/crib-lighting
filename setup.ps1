@@ -18,6 +18,25 @@ Write-Host "`n=============================" -ForegroundColor Magenta
 Write-Host "  crib-lighting setup" -ForegroundColor Magenta
 Write-Host "=============================" -ForegroundColor Magenta
 
+$admin = ([Security.Principal.WindowsPrincipal] `
+    [Security.Principal.WindowsIdentity]::GetCurrent()
+    ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+# The firewall rule and the login task both need admin. Ask once, here,
+# rather than getting halfway and skipping them.
+if (-not $admin -and $PSCommandPath) {
+    Write-Host "`n   Windows will ask for permission -- say yes." -ForegroundColor Yellow
+    Write-Host "   (It is needed to let your phone through the firewall.)" -ForegroundColor Yellow
+    try {
+        Start-Process powershell -Verb RunAs -Wait -ArgumentList @(
+            "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`""
+        )
+        exit 0
+    } catch {
+        Write-Host "   Carrying on without it." -ForegroundColor Yellow
+    }
+}
+
 # --- 1. Python ------------------------------------------------------------
 Step "Checking Python"
 $python = $null
@@ -69,10 +88,6 @@ Good "Installed."
 
 # --- 3. Firewall ----------------------------------------------------------
 Step "Checking the firewall"
-$admin = ([Security.Principal.WindowsPrincipal] `
-    [Security.Principal.WindowsIdentity]::GetCurrent()
-    ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-
 if ($admin) {
     if (-not (Get-NetFirewallRule -DisplayName "crib-lighting" -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName "crib-lighting" -Direction Inbound `
@@ -102,8 +117,15 @@ try {
 
 # --- 5. Launch ------------------------------------------------------------
 Step "Starting crib-lighting"
-Start-Process -FilePath $py -ArgumentList "-m crib.app" `
-    -WorkingDirectory $PSScriptRoot -WindowStyle Minimized | Out-Null
+$log = Join-Path $PSScriptRoot "crib-lighting.log"
+$errlog = Join-Path $PSScriptRoot "crib-lighting.err.log"
+# pythonw has no console window, and combining -WindowStyle with output
+# redirection is unreliable in Windows PowerShell 5.1.
+$pyw = Join-Path $PSScriptRoot ".venv\Scripts\pythonw.exe"
+if (-not (Test-Path $pyw)) { $pyw = $py }
+Start-Process -FilePath $pyw -ArgumentList "-m crib.app" `
+    -WorkingDirectory $PSScriptRoot `
+    -RedirectStandardOutput $log -RedirectStandardError $errlog | Out-Null
 
 $ip = (Get-NetIPAddress -AddressFamily IPv4 |
     Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } |
@@ -121,7 +143,15 @@ foreach ($i in 1..30) {
 }
 
 if (-not $ready) {
-    Write-Host "`n   The server did not start. Run start.bat to see the error." -ForegroundColor Red
+    Write-Host "`n   The server did not start. Here is why:`n" -ForegroundColor Red
+    foreach ($file in @($errlog, $log)) {
+        if ((Test-Path $file) -and (Get-Item $file).Length -gt 0) {
+            Get-Content $file -Tail 20 | ForEach-Object {
+                Write-Host "   $_" -ForegroundColor Red
+            }
+        }
+    }
+    Write-Host "`n   Full log: $log" -ForegroundColor Yellow
     Read-Host "`nPress Enter to close"; exit 1
 }
 Good "Running."

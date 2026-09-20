@@ -4,6 +4,9 @@ config.yaml
 # Spotify refresh token.
 spotify_token.json
 
+# Server logs written by setup.ps1
+*.log
+
 __pycache__/
 *.py[cod]
 .venv/

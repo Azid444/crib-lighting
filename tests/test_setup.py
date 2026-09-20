@@ -149,3 +149,44 @@ def test_saving_nothing_is_allowed(fresh):
     client, _ = fresh
     assert client.post("/api/setup/save", json={"devices": []}).status_code == 200
     assert client.get("/api/setup/state").json()["needs_setup"] is True
+
+
+# --- startup with no config ----------------------------------------------
+
+def test_main_starts_without_a_config_file(tmp_path, monkeypatch):
+    """First run has no config.yaml; main() must still boot the wizard."""
+    import crib.app as appmod
+
+    monkeypatch.setattr(appmod, "CONFIG", str(tmp_path / "missing.yaml"))
+    called = {}
+    monkeypatch.setattr(appmod.uvicorn, "run",
+                        lambda app, host, port: called.update(host=host, port=port))
+    appmod.main()                      # must not raise
+    assert called == {"host": "0.0.0.0", "port": 8080}
+
+
+def test_main_honours_configured_host_and_port(tmp_path, monkeypatch):
+    import crib.app as appmod
+
+    path = tmp_path / "config.yaml"
+    save_config(str(path), {"server": {"host": "127.0.0.1", "port": 9000},
+                            "devices": []})
+    monkeypatch.setattr(appmod, "CONFIG", str(path))
+    called = {}
+    monkeypatch.setattr(appmod.uvicorn, "run",
+                        lambda app, host, port: called.update(host=host, port=port))
+    appmod.main()
+    assert called == {"host": "127.0.0.1", "port": 9000}
+
+
+def test_main_survives_a_config_with_no_server_section(tmp_path, monkeypatch):
+    import crib.app as appmod
+
+    path = tmp_path / "config.yaml"
+    save_config(str(path), {"devices": [], "server": None})
+    monkeypatch.setattr(appmod, "CONFIG", str(path))
+    called = {}
+    monkeypatch.setattr(appmod.uvicorn, "run",
+                        lambda app, host, port: called.update(port=port))
+    appmod.main()
+    assert called["port"] == 8080

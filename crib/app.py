@@ -287,13 +287,15 @@ async def index():
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    import yaml
+    from .setup import load_config
 
-    with open(CONFIG) as fh:
-        cfg = yaml.safe_load(fh).get("server", {})
-    uvicorn.run(
-        app, host=cfg.get("host", "0.0.0.0"), port=int(cfg.get("port", 8080))
-    )
+    # A missing config is the normal first run: start anyway and serve the
+    # setup wizard, which is what writes the config in the first place.
+    cfg = load_config(CONFIG).get("server") or {}
+    host, port = cfg.get("host", "0.0.0.0"), int(cfg.get("port", 8080))
+    if not os.path.exists(CONFIG):
+        log.info("no %s yet - open http://127.0.0.1:%d/setup", CONFIG, port)
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":
