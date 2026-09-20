@@ -235,3 +235,11 @@ async def test_candidates_are_passed_through(monkeypatch):
 
     result = await discover_all(timeout=0.1)
     assert result["candidates"] == [other]
+
+
+def test_advertised_services_map_to_real_protocols():
+    """A service UUID must never name a dialect the driver cannot encode."""
+    from crib.discover import BLE_SERVICES
+    from crib.drivers.mrstar import MrStarLight
+
+    assert set(BLE_SERVICES.values()) <= set(MrStarLight.PROTOCOLS)

@@ -114,7 +114,9 @@ async def test_empty_candidate_list_is_safe():
 # --- driver plumbing ------------------------------------------------------
 
 def test_every_known_char_maps_to_a_real_protocol():
-    assert set(WRITE_CHARS.values()) <= {"triones", "lednet"}
+    from crib.drivers.mrstar import MrStarLight
+
+    assert set(WRITE_CHARS.values()) <= set(MrStarLight.PROTOCOLS)
 
 
 def test_driver_accepts_a_probed_characteristic():

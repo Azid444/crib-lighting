@@ -57,12 +57,63 @@ def test_all_packet_bytes_are_valid():
                     assert all(0 <= b <= 255 for b in pkt)
 
 
-@pytest.mark.parametrize("protocol", MrStarLight.PROTOCOLS)
-def test_every_dialect_carries_the_colour(protocol):
+# findn is the exception: it sends hue and saturation, not RGB.
+RGB_DIALECTS = [p for p in MrStarLight.PROTOCOLS if p != "findn"]
+
+
+@pytest.mark.parametrize("protocol", RGB_DIALECTS)
+def test_rgb_dialects_carry_the_colour_bytes(protocol):
     """Whatever the framing, the three colour bytes must appear in order."""
     joined = b"".join(light(protocol)._packets(
         State(on=True, brightness=255, color=(11, 22, 33))))
     assert bytes([11, 22, 33]) in joined
+
+
+@pytest.mark.parametrize("protocol", MrStarLight.PROTOCOLS)
+def test_every_dialect_distinguishes_colours(protocol):
+    red = b"".join(light(protocol)._packets(State(True, 255, (255, 0, 0))))
+    blue = b"".join(light(protocol)._packets(State(True, 255, (0, 0, 255))))
+    assert red != blue
+
+
+def test_findn_sends_hue_and_saturation():
+    """Pure red is hue 0, fully saturated; the board wants 0..360 / 0..1000."""
+    pkts = light("findn")._packets(State(True, 255, (255, 0, 0)))
+    colour = next(p for p in pkts if p[1] == 0x04)
+    assert colour[3:5] == bytes([0, 0])                  # hue 0
+    assert int.from_bytes(colour[5:7], "big") == 1000    # saturation
+
+
+def test_findn_hue_wraps_within_two_bytes():
+    """Magenta is hue 300, which must not overflow the high byte."""
+    colour = next(p for p in light("findn")._packets(
+        State(True, 255, (255, 0, 255))) if p[1] == 0x04)
+    assert int.from_bytes(colour[3:5], "big") == 300
+
+
+def test_findn_uses_its_brightness_register_not_the_colour():
+    """Half brightness must dim via 0x05, leaving the hue untouched."""
+    pkts = light("findn")._packets(State(True, 128, (255, 0, 0)))
+    colour = next(p for p in pkts if p[1] == 0x04)
+    bright = next(p for p in pkts if p[1] == 0x05)
+    assert int.from_bytes(colour[5:7], "big") == 1000
+    assert 100 <= int.from_bytes(bright[3:5], "big") <= 1000
+
+
+def test_findn_skips_unchanged_power_and_brightness():
+    """A rave sends 20 frames a second; only the colour should repeat."""
+    l = light("findn")
+    first = l._packets(State(True, 255, (255, 0, 0)))
+    second = l._packets(State(True, 255, (0, 255, 0)))
+    assert len(first) == 3 and len(second) == 1
+    assert second[0][1] == 0x04
+
+
+def test_findn_resends_power_after_an_off():
+    l = light("findn")
+    l._packets(State(True, 255, (255, 0, 0)))
+    l._packets(State(on=False))
+    assert l._packets(State(True, 255, (255, 0, 0)))[0][3] == 0x01
 
 
 @pytest.mark.parametrize("protocol", MrStarLight.PROTOCOLS)

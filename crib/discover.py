@@ -30,7 +30,10 @@ BLE_SERVICES = {
     "0000ffd9-0000-1000-8000-00805f9b34fb": "triones",
     "0000ffd5-0000-1000-8000-00805f9b34fb": "triones",
     "0000ff01-0000-1000-8000-00805f9b34fb": "lednet",
-    "0000fff0-0000-1000-8000-00805f9b34fb": "triones",
+    # fff0 hosts both the FINDN boards (MR-Star stock, advertised as
+    # GATT--DEMO) and the ELK-BLEDOM clones; FINDN is the commoner of
+    # the two and probing corrects a wrong guess.
+    "0000fff0-0000-1000-8000-00805f9b34fb": "findn",
 }
 
 

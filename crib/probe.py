@@ -15,12 +15,13 @@ import sys
 log = logging.getLogger(__name__)
 
 # Characteristics these boards accept colour writes on, and the dialect each
-# implies. fff3 and ffe1 are serial-passthrough modules that still take the
-# Triones 0x56 packet.
+# implies. The mapping is a first guess only -- fff3 in particular is shared by
+# FINDN and ELK-BLEDOM boards, which speak nothing alike -- so --hunt tries
+# every dialect on every writable characteristic regardless.
 WRITE_CHARS = {
     "0000ffd9-0000-1000-8000-00805f9b34fb": "triones",
     "0000ff01-0000-1000-8000-00805f9b34fb": "lednet",
-    "0000fff3-0000-1000-8000-00805f9b34fb": "triones",
+    "0000fff3-0000-1000-8000-00805f9b34fb": "findn",
     "0000ffe1-0000-1000-8000-00805f9b34fb": "triones",
     "0000ffe9-0000-1000-8000-00805f9b34fb": "triones",
 }
