@@ -348,3 +348,27 @@ async def test_resolve_returns_none_when_nothing_is_advertising(monkeypatch):
     from crib.probe import resolve
 
     assert await resolve("GATT--DEMO") is None
+
+
+# --- three-way answer -----------------------------------------------------
+
+from crib.probe import _ask
+
+
+@pytest.mark.parametrize("typed,expected", [
+    ("y", "yes"), ("yes", "yes"), ("Y", "yes"),
+    ("p", "partial"), ("partial", "partial"),
+    ("n", "no"), ("", "no"), ("anything", "no"),
+])
+def test_answer_parsing(typed, expected, monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda _: typed)
+    assert _ask("?") == expected
+
+
+def test_interrupting_the_prompt_exits_cleanly(monkeypatch):
+    def interrupt(_):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("builtins.input", interrupt)
+    with pytest.raises(SystemExit):
+        _ask("?")

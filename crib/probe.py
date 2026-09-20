@@ -285,12 +285,23 @@ async def _dump(addresses: list[str]) -> None:
         print(f"  ({len(writable)} writable)")
 
 
-def _ask(question: str) -> bool:
+def _ask(question: str) -> str:
+    """Returns 'yes', 'partial' or 'no'.
+
+    'partial' matters: a light that flickers white is receiving something but
+    not decoding the colour packet, which identifies the right device while
+    ruling out that characteristic.
+    """
     try:
-        return input(question).strip().lower().startswith("y")
+        answer = input(question).strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
         raise SystemExit(0)
+    if answer.startswith("y"):
+        return "yes"
+    if answer.startswith("p"):
+        return "partial"
+    return "no"
 
 
 async def _hunt(target: str) -> None:
@@ -335,15 +346,21 @@ async def _hunt(target: str) -> None:
         print("This device has nothing writable, so it is not the light.")
         return
 
-    print(f"\n{len(options)} things to try. Watch your TV backlight.\n")
+    print(f"\n{len(options)} things to try. Watch your TV backlight.")
+    print("Answer y for clean RED, GREEN, BLUE. Answer p if it reacted but")
+    print("with the wrong colours -- that still tells us something.\n")
+
+    partials = []
     for i, (char, protocol) in enumerate(options, 1):
-        print(f"[{i}/{len(options)}] {char[4:8]} as {protocol} ... ", end="", flush=True)
+        print(f"[{i}/{len(options)}] {char[4:8]} as {protocol} ... ",
+              end="", flush=True)
         result = await flash_with(address, char, protocol)
         if not result["ok"]:
             print(f"failed ({result['error']})")
             continue
         print("sent")
-        if _ask("        Did your light flash? [y/N] "):
+        answer = _ask("        Red, green, blue? [y / p = reacted wrongly / N] ")
+        if answer == "yes":
             print(f"""
 Found it. Add this to the devices list in config.yaml:
 
@@ -355,7 +372,18 @@ Found it. Add this to the devices list in config.yaml:
     char: "{char}"
 """)
             return
-    print("\nNothing on this device drove the light. Try another address.")
+        if answer == "partial":
+            partials.append((char, protocol))
+
+    print("\nNothing drove the colours properly.")
+    if partials:
+        print("\nBut these got a reaction, so this IS the right device -- the")
+        print("colour packet just is not being decoded:\n")
+        for char, protocol in partials:
+            print(f"   {char}  as {protocol}")
+        print("\nSend that list back and the protocol can be corrected.")
+    else:
+        print("Try another address, or --dump this one to see its services.")
 
 
 async def _sweep() -> None:
