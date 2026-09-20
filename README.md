@@ -275,7 +275,7 @@ WS     /ws                  state pushed to every open phone
 pip install pytest pytest-asyncio && python -m pytest
 ```
 
-141 tests, no hardware, sound card, or Spotify account required. Fake devices cover the
+161 tests, no hardware, sound card, or Spotify account required. Fake devices cover the
 engine and API, the MR-Star packet encoding is asserted byte by byte, and the
 beat detector is verified against synthesised tracks at known tempos. The
 WASAPI loopback selection is tested against a simulated Windows device tree,
@@ -302,7 +302,20 @@ New-NetFirewallRule -DisplayName "crib-lighting (Tuya discovery)" `
     -Action Allow -Profile Private
 ```
 
-**The scan finds no Bluetooth light.** These controllers are white-labelled
+**The scan finds no Bluetooth light.** Many of these controllers advertise
+no name and no services, so scanning cannot identify them. Press **Find my TV
+backlight** in the wizard: it connects to each nearby device in turn until one
+accepts colour commands, then flashes it red, green and blue so you can see
+which it is. There is a command-line version too:
+
+```powershell
+.venv\Scripts\python.exe -m crib.probe
+```
+
+It skips rotating privacy addresses (phones, watches) and tries fixed ones
+first, so it usually lands on the light within a few attempts.
+
+**Older note on name matching.** These controllers are white-labelled
 and many advertise nothing that identifies them. The wizard lists every other
 Bluetooth device it saw under *"Don't see your TV backlight?"* — pick yours
 and choose a protocol (try `triones` first, then `lednet`). The device must be

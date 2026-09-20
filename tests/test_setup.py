@@ -252,3 +252,48 @@ def test_manually_added_tuya_with_a_key_saves(fresh):
     client.post("/api/setup/save", json={"devices": [manual]})
     saved = load_config(path)["devices"][0]
     assert saved["local_key"] == "secret" and saved["device_id"] == "abc"
+
+
+def test_probed_characteristic_is_saved(fresh):
+    """A board on a non-default characteristic must keep it in the config."""
+    client, path = fresh
+    probed = {"driver": "mrstar", "id": "tv", "name": "TV Backlight",
+              "address": "8C:26:AA:BA:A3:3F", "protocol": "triones",
+              "char": "0000fff3-0000-1000-8000-00805f9b34fb",
+              "_detail": "confirmed", "_likely": True}
+    client.post("/api/setup/save", json={"devices": [probed]})
+    saved = load_config(path)["devices"][0]
+    assert saved["char"] == "0000fff3-0000-1000-8000-00805f9b34fb"
+
+
+def test_autofind_needs_a_scan_first(fresh):
+    client, _ = fresh
+    assert client.post("/api/setup/autofind").status_code == 400
+
+
+def test_autofind_returns_the_match(fresh, monkeypatch):
+    client, _ = fresh
+
+    async def fake_scan(timeout=10.0):
+        return {"wled": [], "mrstar": [], "tuya": [], "notes": {},
+                "candidates": [{"address": "8C:26:AA:BA:A3:3F",
+                                "name": "", "_likely": False, "rssi": -59}]}
+
+    async def fake_find(candidates, timeout=12.0, limit=8):
+        return {"found": {"driver": "mrstar", "id": "tv", "name": "TV Backlight",
+                          "address": "8C:26:AA:BA:A3:3F", "protocol": "triones",
+                          "char": "0000ffd9-0000-1000-8000-00805f9b34fb"},
+                "tried": [{"address": "8C:26:AA:BA:A3:3F", "name": "",
+                           "ok": True, "error": None}]}
+
+    monkeypatch.setattr("crib.discover.discover_all", fake_scan)
+    monkeypatch.setattr("crib.probe.find_the_light", fake_find)
+    client.post("/api/setup/scan")
+    body = client.post("/api/setup/autofind").json()
+    assert body["found"]["address"] == "8C:26:AA:BA:A3:3F"
+
+
+def test_wizard_offers_the_backlight_finder(fresh):
+    client, _ = fresh
+    html = client.get("/setup").text
+    assert 'id="auto"' in html and "Find my TV backlight" in html

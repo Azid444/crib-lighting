@@ -25,12 +25,18 @@ class MrStarLight(Light):
     caps = Caps(color=True, brightness=True, max_hz=10.0)
 
     def __init__(
-        self, id: str, name: str, address: str, protocol: str = "triones"
+        self, id: str, name: str, address: str, protocol: str = "triones",
+        char: str | None = None,
     ) -> None:
         super().__init__(id, name)
         self.address = address
         self.protocol = protocol
-        self._char = TRIONES_CHAR if protocol == "triones" else LEDNET_CHAR
+        # Some boards speak a known protocol on a different characteristic
+        # (fff3 and ffe1 both turn up). Probing finds the real one, and it
+        # overrides the protocol's default here.
+        self._char = char or (
+            TRIONES_CHAR if protocol == "triones" else LEDNET_CHAR
+        )
         self._client: BleakClient | None = None
         self._seq = 0
 

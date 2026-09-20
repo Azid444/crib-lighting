@@ -70,6 +70,14 @@
   <div class="msg" id="msg"></div>
 
   <div id="notes"></div>
+  <div id="autofind" style="display:none">
+    <h2>TV backlight</h2>
+    <div class="note">It advertises no name, so it cannot be spotted by
+      scanning alone. This connects to each nearby device until one accepts
+      colour commands, then flashes it so you can see which it is.</div>
+    <button id="auto" style="margin-top:10px">Find my TV backlight</button>
+    <div id="autolog"></div>
+  </div>
   <div id="results"></div>
   <div id="extras"></div>
 
@@ -271,6 +279,9 @@ $('#scan').onclick = async () => {
     candidates = data.candidates || [];
     notes = data.notes || {};
     renderNotes();
+    $('#autofind').style.display =
+      (candidates.length && !found.some(d => d.driver === 'mrstar'))
+        ? 'block' : 'none';
     if (!found.length) {
       show('No lights identified themselves. See the notes below — you can '
         + 'still add devices by hand.', 'err');
@@ -313,6 +324,64 @@ $('#save').onclick = async () => {
 
 // If a config already exists, offer the normal UI instead.
 renderExtras();
+
+// --- finding an unnamed Bluetooth light -------------------------------
+$('#auto').onclick = async () => {
+  const btn = $('#auto'), log = $('#autolog');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Connecting to devices…';
+  log.innerHTML = '<div class="note">This takes a few seconds per device.</div>';
+  try {
+    const res = await fetch('/api/setup/autofind', {method: 'POST'});
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+
+    const lines = data.tried.map(t =>
+      `<div class="mono">${t.ok ? '✅' : '❌'} ${t.address} `
+      + `${t.name || '(no name)'}</div>`).join('');
+    log.innerHTML = lines;
+
+    if (!data.found) {
+      log.innerHTML += `<div class="hint">None accepted colour commands.
+        If your backlight is connected to its app on your phone, close that
+        app and try again — these boards allow one connection at a time.</div>`;
+      return;
+    }
+
+    const d = data.found;
+    log.innerHTML += `<div class="hint">Flashing <b>${d.address}</b> red,
+      green and blue. <b>Watch your TV backlight.</b></div>`;
+    await fetch('/api/setup/flash', {
+      method: 'POST', headers: {'content-type': 'application/json'},
+      body: JSON.stringify({address: d.address, protocol: d.protocol,
+                            char: d.char}),
+    });
+
+    const yes = document.createElement('button');
+    yes.className = 'primary';
+    yes.textContent = 'Yes — that was my backlight';
+    yes.style.marginTop = '10px';
+    yes.onclick = () => {
+      candidates = candidates.filter(x => x.address !== d.address);
+      addDevice(d);
+      $('#autofind').style.display = 'none';
+    };
+    const no = document.createElement('button');
+    no.textContent = 'No — try the next one';
+    no.style.marginTop = '6px';
+    no.onclick = () => {
+      candidates = candidates.filter(x => x.address !== d.address);
+      log.innerHTML = '';
+      $('#auto').click();
+    };
+    log.append(yes, no);
+  } catch (e) {
+    log.innerHTML = `<div class="hint">Could not run: ${e.message || e}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Find my TV backlight';
+  }
+};
 
 fetch('/api/setup/state').then(r => r.json()).then(s => {
   if (!s.needs_setup) {

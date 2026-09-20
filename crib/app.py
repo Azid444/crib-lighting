@@ -24,7 +24,9 @@ room: Room | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global room
+    global room, _found, _candidates
+    # Discovery results are per-run: a restart must not serve stale ones.
+    _found, _candidates = [], []
     room = Room.from_file(CONFIG)
     await room.connect_all()
     await room.start_spotify()
@@ -88,6 +90,7 @@ async def scene(name: str) -> dict:
 # Held between the scan and the save so the user can fill in a Tuya key
 # without us having to scan the network again.
 _found: list[dict] = []
+_candidates: list[dict] = []
 
 
 @app.get("/api/setup/state")
@@ -106,8 +109,9 @@ async def setup_scan() -> dict:
     """Look for lights on the network and over Bluetooth."""
     from .discover import discover_all
 
-    global _found
+    global _found, _candidates
     results = await discover_all(timeout=10.0)
+    _candidates = results["candidates"]
     _found = [d for key in ("wled", "mrstar", "tuya") for d in results[key]]
     return {
         "found": _found,
@@ -145,6 +149,42 @@ async def setup_save(body: SaveBody) -> dict:
     await room.connect_all()
     await room.start_spotify()
     return {"saved": True, "state": room.snapshot()}
+
+
+class ProbeBody(BaseModel):
+    address: str
+
+
+@app.post("/api/setup/probe")
+async def setup_probe(body: ProbeBody) -> dict:
+    """Connect to one device and report whether it can be driven as a light."""
+    from .probe import probe
+
+    return await probe(body.address)
+
+
+@app.post("/api/setup/autofind")
+async def setup_autofind() -> dict:
+    """Try the likeliest candidates until one accepts colour commands."""
+    from .probe import find_the_light
+
+    if not _found and not _candidates:
+        raise HTTPException(400, "run a scan first")
+    return await find_the_light(_candidates or [])
+
+
+class FlashBody(BaseModel):
+    address: str
+    protocol: str = "triones"
+    char: str | None = None
+
+
+@app.post("/api/setup/flash")
+async def setup_flash(body: FlashBody) -> dict:
+    """Cycle a light through colours so the user can recognise it."""
+    from .probe import flash
+
+    return await flash(body.address, body.protocol, body.char)
 
 
 @app.get("/setup")
