@@ -34,6 +34,23 @@ def is_private_address(address: str) -> bool:
     return 0x40 <= first <= 0x7F
 
 
+# Connection errors that mean "something else already has this device".
+# These boards accept exactly one connection, so the phone app wins.
+BUSY_ERRORS = ("unreachable", "was not found", "not connected",
+               "device is busy", "access denied")
+
+
+def explain_error(error: str | None) -> str | None:
+    """Turn a BLE error into something worth acting on."""
+    if not error:
+        return None
+    if any(marker in error.lower() for marker in BUSY_ERRORS):
+        return ("the device did not accept a connection - it is usually still "
+                "connected to its app on your phone; force-close that app and "
+                "retry")
+    return None
+
+
 def rank(entry: dict) -> tuple:
     """Most-likely-to-be-a-light first, so a sweep finds it early."""
     name = (entry.get("name") or "").lower()
@@ -218,8 +235,12 @@ async def _hunt(address: str) -> None:
     info = await describe(address)
     if not info["ok"]:
         print(f"Could not connect: {info['error']}")
-        print("\nIf this is the right device, close its app on your phone --")
-        print("these boards allow only one connection at a time.")
+        hint = explain_error(info["error"])
+        print(f"\n{hint.capitalize()}." if hint else
+              "\nCheck the device is powered on and in range.")
+        print("\nIn the MR-Star app this shows as 'Connected' under Bound")
+        print("Device. Force-close the app (swipe it away, do not just")
+        print("background it), then run this again.")
         return
 
     options = [(c["uuid"], p) for c in writable_candidates(info["characteristics"])
@@ -269,6 +290,9 @@ async def _sweep() -> None:
         mark = "OK " if t["ok"] else "   "
         print(f"{mark}{t['address']}  {t['name'] or '(no name)'}"
               + ("" if t["ok"] else f"  -- {t['error']}"))
+        hint = explain_error(t["error"])
+        if hint:
+            print(f"   {'':18}  ^ {hint}")
 
     found = result["found"]
     if found:

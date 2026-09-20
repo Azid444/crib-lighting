@@ -207,3 +207,24 @@ async def test_probe_passes_through_a_connection_failure(monkeypatch):
 
     result = await probe("AA:BB")
     assert result["ok"] is False and result["error"] == "Unreachable"
+
+
+# --- error guidance -------------------------------------------------------
+
+from crib.probe import explain_error
+
+
+@pytest.mark.parametrize("error", [
+    "Could not get GATT services: Unreachable",
+    "Device with address E9:DD:AE:0B:9C:51 was not found.",
+    "Device is busy",
+])
+def test_busy_errors_point_at_the_phone_app(error):
+    hint = explain_error(error)
+    assert hint and "phone" in hint
+
+
+def test_unrelated_errors_get_no_invented_advice():
+    assert explain_error("connected, but no known colour characteristic") is None
+    assert explain_error(None) is None
+    assert explain_error("") is None
