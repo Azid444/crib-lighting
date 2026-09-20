@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Crib Setup</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0a0a0f">
+<style>
+  :root{--bg:#0a0a0f;--card:#16161f;--line:#26262f;--text:#f2f2f7;
+        --dim:#8a8a99;--accent:#7c5cff;--ok:#30d158;--warn:#ffd60a}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:16px/1.45 -apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+    padding:max(env(safe-area-inset-top),20px) 16px 40px;max-width:640px;margin:0 auto}
+  h1{font-size:28px;margin:0 0 4px;letter-spacing:-.02em}
+  .sub{color:var(--dim);font-size:14px;margin-bottom:22px}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;
+     color:var(--dim);margin:26px 0 10px}
+  button{font:inherit;color:var(--text);background:var(--card);
+    border:1px solid var(--line);border-radius:14px;padding:16px;
+    min-height:56px;cursor:pointer;width:100%;transition:transform .08s}
+  button:active{transform:scale(.98)}
+  button:disabled{opacity:.5;cursor:default}
+  .primary{border:none;background:linear-gradient(100deg,#7c5cff,#ff2d55);
+           font-weight:700;font-size:17px}
+  .dev{background:var(--card);border:1px solid var(--line);border-radius:14px;
+       padding:14px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start}
+  .dev .ic{font-size:22px;line-height:1.2}
+  .dev .b{flex:1;min-width:0}
+  .dev .n{font-weight:600}
+  .dev .d{color:var(--dim);font-size:13px;margin-top:2px}
+  .tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;
+       margin-top:6px;font-weight:600}
+  .tag.ok{background:#12351f;color:var(--ok)}
+  .tag.need{background:#3a3315;color:var(--warn)}
+  input[type=text]{width:100%;font:inherit;color:var(--text);background:#0e0e15;
+    border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:8px}
+  .note{color:var(--dim);font-size:13px;margin-top:8px;line-height:1.5}
+  .note a{color:var(--accent)}
+  details{background:var(--card);border:1px solid var(--line);
+          border-radius:14px;padding:14px;margin-top:10px}
+  summary{cursor:pointer;font-weight:600}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line);
+        border-top-color:var(--accent);border-radius:50%;
+        animation:spin .7s linear infinite;vertical-align:-2px;margin-right:8px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .msg{border-radius:12px;padding:12px;margin:12px 0;font-size:14px;display:none}
+  .msg.err{background:#3a1520;border:1px solid #6b2436;display:block}
+  .msg.good{background:#12351f;border:1px solid #1f5c33;display:block}
+  .hint{background:#2a2410;border:1px solid #4a4020;border-radius:12px;
+        padding:12px;margin-bottom:10px;font-size:13px;color:#e8d9a0;
+        line-height:1.5}
+  .pick{background:#0e0e15;border:1px solid var(--line);border-radius:10px;
+        padding:10px 12px;margin-bottom:6px;display:flex;gap:10px;
+        align-items:center}
+  .pick .b{flex:1;min-width:0;font-size:14px;overflow:hidden;
+           text-overflow:ellipsis;white-space:nowrap}
+  .pick button{width:auto;min-height:36px;padding:6px 14px;font-size:13px;
+               border-radius:8px}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;
+        color:var(--dim)}
+</style>
+</head>
+<body>
+  <h1>Set up your room</h1>
+  <div class="sub">Finds your lights automatically. Nothing to type unless it asks.</div>
+
+  <button class="primary" id="scan">Scan for my lights</button>
+  <div class="msg" id="msg"></div>
+
+  <div id="notes"></div>
+  <div id="autofind" style="display:none">
+    <h2>TV backlight</h2>
+    <div class="note">It advertises no name, so it cannot be spotted by
+      scanning alone. This connects to each nearby device until one accepts
+      colour commands, then flashes it so you can see which it is.</div>
+    <button id="auto" style="margin-top:10px">Find my TV backlight</button>
+    <div id="autolog"></div>
+  </div>
+  <div id="results"></div>
+  <div id="extras"></div>
+
+  <div id="finish" style="display:none">
+    <h2>Spotify (optional)</h2>
+    <details>
+      <summary>Show track info and controls on my phone</summary>
+      <div class="note">
+        Create an app at
+        <a href="https://developer.spotify.com/dashboard" target="_blank">developer.spotify.com/dashboard</a>,
+        add <code>http://127.0.0.1:8080/api/spotify/callback</code> as a redirect
+        URI, and paste the Client ID here. Skip it if you cannot be bothered —
+        everything else works without it.
+      </div>
+      <input type="text" id="spotify" placeholder="Spotify Client ID" autocomplete="off">
+    </details>
+
+    <h2></h2>
+    <button class="primary" id="save">Save and start</button>
+  </div>
+
+<script>
+const $ = s => document.querySelector(s);
+let found = [], candidates = [], notes = {};
+
+// The Bluetooth dialects the driver can encode, most likely first. Kept in
+// step with MrStarLight.PROTOCOLS by a test.
+const PROTOCOLS = ['findn', 'triones', 'elk', 'elk_alt', 'lednet',
+                   'lednetwf', 'raw'];
+
+function show(text, kind) {
+  const m = $('#msg');
+  m.className = 'msg ' + kind;
+  m.innerHTML = text;
+}
+
+const ICONS = {wled: '🔆', mrstar: '📺', tuya: '💡'};
+
+function render() {
+  const box = $('#results');
+  box.innerHTML = '';
+  if (!found.length) return;
+
+  const h = document.createElement('h2');
+  h.textContent = 'Found ' + found.length + ' device' + (found.length > 1 ? 's' : '');
+  box.append(h);
+
+  found.forEach((d, i) => {
+    const needsKey = d.driver === 'tuya' && !d.local_key;
+    const el = document.createElement('div');
+    el.className = 'dev';
+    el.innerHTML = `
+      <div class="ic">${ICONS[d.driver] || '💡'}</div>
+      <div class="b">
+        <div class="n"></div>
+        <div class="d"></div>
+        <span class="tag ${needsKey ? 'need' : 'ok'}">
+          ${needsKey ? 'needs a local key' : 'ready'}</span>
+      </div>`;
+    el.querySelector('.n').textContent = d.name || d.driver;
+    el.querySelector('.d').textContent = d._detail || '';
+
+    if (needsKey) {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'Tuya local key';
+      input.autocomplete = 'off';
+      input.oninput = () => { found[i].local_key = input.value.trim(); };
+      const note = document.createElement('div');
+      note.className = 'note';
+      note.innerHTML = 'Tuya never broadcasts this, so it has to come from your '
+        + 'account. Run <code>python -m tinytuya wizard</code> in this folder and '
+        + 'paste the key it prints for this device. '
+        + '<b>Or just leave it blank</b> — your other lights will still work and '
+        + 'the wall switch keeps working as a normal switch.';
+      el.querySelector('.b').append(input, note);
+    }
+    box.append(el);
+  });
+  $('#finish').style.display = 'block';
+}
+
+function renderNotes() {
+  const box = $('#notes');
+  box.innerHTML = '';
+  for (const text of Object.values(notes)) {
+    const el = document.createElement('div');
+    el.className = 'hint';
+    el.textContent = text;
+    box.append(el);
+  }
+}
+
+// Bluetooth devices that did not identify themselves as lights, plus a way
+// to add anything by hand. Discovery failing must never be a dead end.
+function addDevice(device) {
+  found.push(device);
+  render();
+  renderExtras();
+}
+
+// Always available, scan or no scan: if Bluetooth found nothing at all there
+// is nothing to pick from, and the user still needs a way in.
+function renderExtras() {
+  const box = $('#extras');
+  box.innerHTML = '';
+
+  if (candidates.length) {
+    const d = document.createElement('details');
+    d.innerHTML = `<summary>Don't see your TV backlight? `
+      + `(${candidates.length} other Bluetooth device`
+      + `${candidates.length > 1 ? 's' : ''})</summary>
+      <div class="note">These did not announce themselves as lights, but the
+        MR-Star often does not. Pick yours and choose a protocol — try
+        <b>findn</b> first (that is the MR-Star stock board, which advertises
+        as GATT--DEMO). If the colours do nothing afterwards, run
+        <code>python -m crib.probe --hunt &lt;name&gt;</code>, which tries
+        every protocol and asks what you saw.</div>
+      <div id="cands"></div>`;
+    box.append(d);
+
+    candidates.forEach(c => {
+      const row = document.createElement('div');
+      row.className = 'pick';
+      row.innerHTML = '<div class="b"></div>';
+      row.querySelector('.b').innerHTML =
+        `${c.name || 'unnamed'}<div class="mono">${c.address}</div>`;
+      for (const proto of PROTOCOLS) {
+        const b = document.createElement('button');
+        b.textContent = proto;
+        b.onclick = () => {
+          candidates = candidates.filter(x => x !== c);
+          addDevice({...c, protocol: proto, _likely: true,
+                     _detail: `${c.name || c.address} (${proto} protocol)`});
+        };
+        row.append(b);
+      }
+      d.querySelector('#cands').append(row);
+    });
+  }
+
+  const manual = document.createElement('details');
+  manual.innerHTML = `<summary>Add a light by hand</summary>
+    <div class="note">Use this if the scan missed something you know is there.
+      For the TV backlight, its advertised name works as well as its address
+      — and survives better, because these boards pick a new address every
+      time they are power-cycled. Run
+      <code>.venv\Scripts\python.exe -m crib.scan</code> in the project
+      folder to list what is nearby.</div>
+
+    <div class="mono" style="margin-top:14px">WLED STRIP</div>
+    <input type="text" id="mwled" placeholder="IP address, e.g. 192.168.1.50">
+    <button id="addwled" style="margin-top:8px">Add WLED strip</button>
+
+    <div class="mono" style="margin-top:18px">TV BACKLIGHT (BLUETOOTH)</div>
+    <input type="text" id="mble" placeholder="Address or name, e.g. GATT--DEMO">
+    <select id="mbleproto">${PROTOCOLS.map(p =>
+      `<option value="${p}">${p}</option>`).join('')}</select>
+    <button id="addble" style="margin-top:8px">Add TV backlight</button>
+
+    <div class="mono" style="margin-top:18px">TUYA WALL SWITCH</div>
+    <input type="text" id="mtip" placeholder="IP address">
+    <input type="text" id="mtid" placeholder="Device ID">
+    <input type="text" id="mtkey" placeholder="Local key">
+    <button id="addtuya" style="margin-top:8px">Add wall switch</button>`;
+  box.append(manual);
+
+  const val = id => manual.querySelector('#' + id).value.trim();
+  const clear = (...ids) => ids.forEach(i => manual.querySelector('#' + i).value = '');
+
+  manual.querySelector('#addwled').onclick = () => {
+    if (!val('mwled')) return;
+    addDevice({driver: 'wled', id: 'strip', name: 'WLED Strip',
+               host: val('mwled'), _detail: `added by hand (${val('mwled')})`});
+    clear('mwled');
+  };
+
+  manual.querySelector('#addble').onclick = () => {
+    if (!val('mble')) return;
+    const proto = manual.querySelector('#mbleproto').value;
+    addDevice({driver: 'mrstar', id: 'tv', name: 'TV Backlight',
+               address: val('mble'), protocol: proto,
+               _detail: `added by hand (${proto} protocol)`});
+    clear('mble');
+  };
+
+  manual.querySelector('#addtuya').onclick = () => {
+    if (!val('mtip') || !val('mtid')) return;
+    addDevice({driver: 'tuya', id: 'ceiling', name: 'Room Lights',
+               address: val('mtip'), device_id: val('mtid'),
+               local_key: val('mtkey'), version: 3.3,
+               _detail: `added by hand (${val('mtip')})`});
+    clear('mtip', 'mtid', 'mtkey');
+  };
+
+  $('#finish').style.display = 'block';
+}
+
+$('#scan').onclick = async () => {
+  const btn = $('#scan');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Scanning network and Bluetooth…';
+  show('This takes about 15 seconds. Make sure your lights are powered on.', 'good');
+  try {
+    const res = await fetch('/api/setup/scan', {method: 'POST'});
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    found = data.found;
+    candidates = data.candidates || [];
+    notes = data.notes || {};
+    renderNotes();
+    $('#autofind').style.display =
+      (candidates.length && !found.some(d => d.driver === 'mrstar'))
+        ? 'block' : 'none';
+    if (!found.length) {
+      show('No lights identified themselves. See the notes below — you can '
+        + 'still add devices by hand.', 'err');
+    } else {
+      const c = data.counts;
+      show(`Found ${c.wled} WLED, ${c.mrstar} Bluetooth, ${c.tuya} Tuya.`, 'good');
+    }
+    render();
+    renderExtras();
+  } catch (e) {
+    show('Scan failed: ' + (e.message || e), 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = found.length ? 'Scan again' : 'Scan for my lights';
+  }
+};
+
+$('#save').onclick = async () => {
+  const btn = $('#save');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Saving…';
+  try {
+    const res = await fetch('/api/setup/save', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({
+        devices: found,
+        spotify_client_id: $('#spotify').value.trim(),
+      }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    show('Saved. Taking you to your lights…', 'good');
+    setTimeout(() => location.href = '/', 800);
+  } catch (e) {
+    show('Could not save: ' + (e.message || e), 'err');
+    btn.disabled = false;
+    btn.textContent = 'Save and start';
+  }
+};
+
+// If a config already exists, offer the normal UI instead.
+renderExtras();
+
+// --- finding an unnamed Bluetooth light -------------------------------
+$('#auto').onclick = async () => {
+  const btn = $('#auto'), log = $('#autolog');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Connecting to devices…';
+  log.innerHTML = '<div class="note">This takes a few seconds per device.</div>';
+  try {
+    const res = await fetch('/api/setup/autofind', {method: 'POST'});
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+
+    const lines = data.tried.map(t =>
+      `<div class="mono">${t.ok ? '✅' : '❌'} ${t.address} `
+      + `${t.name || '(no name)'}</div>`).join('');
+    log.innerHTML = lines;
+
+    if (!data.found) {
+      log.innerHTML += `<div class="hint">None accepted colour commands.
+        If your backlight is connected to its app on your phone, close that
+        app and try again — these boards allow one connection at a time.</div>`;
+      return;
+    }
+
+    const d = data.found;
+    log.innerHTML += `<div class="hint">Flashing <b>${d.address}</b> red,
+      green and blue. <b>Watch your TV backlight.</b></div>`;
+    await fetch('/api/setup/flash', {
+      method: 'POST', headers: {'content-type': 'application/json'},
+      body: JSON.stringify({address: d.address, protocol: d.protocol,
+                            char: d.char}),
+    });
+
+    const yes = document.createElement('button');
+    yes.className = 'primary';
+    yes.textContent = 'Yes — that was my backlight';
+    yes.style.marginTop = '10px';
+    yes.onclick = () => {
+      candidates = candidates.filter(x => x.address !== d.address);
+      addDevice(d);
+      $('#autofind').style.display = 'none';
+    };
+    const no = document.createElement('button');
+    no.textContent = 'No — try the next one';
+    no.style.marginTop = '6px';
+    no.onclick = () => {
+      candidates = candidates.filter(x => x.address !== d.address);
+      log.innerHTML = '';
+      $('#auto').click();
+    };
+    log.append(yes, no);
+  } catch (e) {
+    log.innerHTML = `<div class="hint">Could not run: ${e.message || e}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Find my TV backlight';
+  }
+};
+
+fetch('/api/setup/state').then(r => r.json()).then(s => {
+  if (!s.needs_setup) {
+    show('Already set up — <a href="/">open your lights</a>. '
+       + 'Scanning again will replace the current devices.', 'good');
+  }
+});
+</script>
+</body>
+</html>

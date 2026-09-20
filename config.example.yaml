@@ -1,0 +1,56 @@
+# Copy to config.yaml and fill in your own values.
+server:
+  host: 0.0.0.0
+  port: 8080
+
+devices:
+  - id: strip
+    name: Desk Strip
+    driver: wled
+    host: 192.168.1.50        # WLED device IP (set a DHCP reservation for it)
+
+  - id: tv
+    name: TV Backlight
+    driver: mrstar
+    address: "AA:BB:CC:DD:EE:FF"   # run `python -m crib.scan` to find this
+
+  - id: ceiling
+    name: Room Lights
+    driver: tuya
+    device_id: "abcdef1234567890"  # from tinytuya wizard
+    address: 192.168.1.60
+    local_key: "0123456789abcdef"
+    version: 3.3
+
+# Sound-reactive rave (optional). Leave `device` unset to use the default
+# input. To react to what the PC is *playing* rather than the room, point this
+# at a loopback device -- run `python -m crib.audio` to list them by index.
+audio:
+  # Leave unset: on Windows this auto-captures whatever your speakers are
+  # playing via WASAPI loopback, with no virtual audio cable needed. Set it to
+  # an index from `python -m crib.audio` to force a specific device.
+  device: null
+  loopback: true      # false = always use the microphone instead
+  sensitivity: 1.35   # lower = more beats detected, higher = only big hits
+  # Hold the lights back to match speaker lag. Capture happens before the
+  # audio leaves the PC, so anything downstream adds delay the lights do not
+  # have: Bluetooth 100-250ms, HDMI/eARC 30-120ms, wired ~0.
+  # Tune it live from the phone.
+  delay_ms: 0
+
+# Which signal drives the beat: auto | mic | spotify
+# auto uses Spotify's beat grid when your account still has access to it,
+# and otherwise whatever the sound card hears.
+source: auto
+
+# Spotify (optional). Gives now-playing and transport control for whichever
+# device is playing -- an Apple TV, a phone, a speaker -- without ever moving
+# playback to the PC.
+#
+# Create an app at https://developer.spotify.com/dashboard, then add exactly
+# this redirect URI to it:  http://127.0.0.1:8080/api/spotify/callback
+# No client secret is needed; this uses PKCE.
+spotify:
+  client_id: ""
+  redirect_uri: "http://127.0.0.1:8080/api/spotify/callback"
+  token_path: "spotify_token.json"

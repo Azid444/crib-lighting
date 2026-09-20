@@ -1,0 +1,13 @@
+# Contains your Tuya local key and device IPs. Never commit it.
+config.yaml
+
+# Spotify refresh token.
+spotify_token.json
+
+# Server logs written by setup.ps1
+*.log
+
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
