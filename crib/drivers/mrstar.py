@@ -17,6 +17,18 @@ from .base import Caps, Light, State
 TRIONES_CHAR = "0000ffd9-0000-1000-8000-00805f9b34fb"
 # "LEDnetWF" boards (newer MR-Star stock).
 LEDNET_CHAR = "0000ff01-0000-1000-8000-00805f9b34fb"
+# ELK-BLEDOM and its clones put their serial-style channel here.
+ELK_CHAR = "0000fff3-0000-1000-8000-00805f9b34fb"
+
+# Where each dialect normally lives, when config.yaml does not say.
+DEFAULT_CHARS = {
+    "triones": TRIONES_CHAR,
+    "lednet": LEDNET_CHAR,
+    "lednetwf": LEDNET_CHAR,
+    "elk": ELK_CHAR,
+    "elk_alt": ELK_CHAR,
+    "raw": ELK_CHAR,
+}
 
 
 class MrStarLight(Light):
@@ -34,9 +46,7 @@ class MrStarLight(Light):
         # Some boards speak a known protocol on a different characteristic
         # (fff3 and ffe1 both turn up). Probing finds the real one, and it
         # overrides the protocol's default here.
-        self._char = char or (
-            TRIONES_CHAR if protocol == "triones" else LEDNET_CHAR
-        )
+        self._char = char or DEFAULT_CHARS.get(protocol, TRIONES_CHAR)
         self._client: BleakClient | None = None
         self._seq = 0
 
@@ -62,29 +72,73 @@ class MrStarLight(Light):
         self._client = None
         self.available = False
 
-    def _packets(self, state: State) -> list[bytes]:
-        if not state.on:
-            return [bytes([0xCC, 0x24, 0x33])] if self.protocol == "triones" else [
-                self._lednet(bytes([0x71, 0x00, 0x0F]))
-            ]
+    # Dialects, best-attested first. A board only speaks one of them, and
+    # the name alone does not say which -- probing does.
+    PROTOCOLS = ("triones", "elk", "elk_alt", "lednet", "lednetwf", "raw")
 
-        # These boards have no brightness register, so scale the colour itself.
+    def _packets(self, state: State) -> list[bytes]:
+        """Encode a state in whichever dialect this board speaks."""
+        # No brightness register on these boards, so scale the colour itself.
         r, g, b = (round(c * state.brightness / 255) for c in state.color)
-        if self.protocol == "triones":
-            return [
-                bytes([0xCC, 0x23, 0x33]),
-                bytes([0x56, r, g, b, 0x00, 0xF0, 0xAA]),
-            ]
-        return [
-            self._lednet(bytes([0x71, 0x01, 0x0F])),
-            self._lednet(bytes([0x41, r, g, b, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x0F])),
-        ]
+        encode = getattr(self, "_p_" + self.protocol, None)
+        if encode is None:
+            raise ValueError(f"unknown protocol {self.protocol!r}")
+        return encode(state.on, r, g, b)
+
+    def _p_triones(self, on, r, g, b):
+        if not on:
+            return [bytes([0xCC, 0x24, 0x33])]
+        return [bytes([0xCC, 0x23, 0x33]),
+                bytes([0x56, r, g, b, 0x00, 0xF0, 0xAA])]
+
+    def _p_elk(self, on, r, g, b):
+        """ELK-BLEDOM and the many boards that clone it. Usually on fff3."""
+        if not on:
+            return [bytes([0x7E, 0x00, 0x04, 0x00, 0x00, 0x00, 0xFF, 0x00, 0xEF])]
+        return [bytes([0x7E, 0x00, 0x04, 0xF0, 0x00, 0x01, 0xFF, 0x00, 0xEF]),
+                bytes([0x7E, 0x00, 0x05, 0x03, r, g, b, 0x00, 0xEF])]
+
+    def _p_elk_alt(self, on, r, g, b):
+        """Same family, later firmware: different leading and trailing bytes."""
+        if not on:
+            return [bytes([0x7E, 0x07, 0x04, 0x00, 0x00, 0x00, 0x10, 0x00, 0xEF])]
+        return [bytes([0x7E, 0x07, 0x04, 0xF0, 0x00, 0x01, 0x10, 0x00, 0xEF]),
+                bytes([0x7E, 0x07, 0x05, 0x03, r, g, b, 0x10, 0xEF])]
+
+    def _p_lednet(self, on, r, g, b):
+        if not on:
+            return [self._lednet(bytes([0x71, 0x00, 0x0F]))]
+        return [self._lednet(bytes([0x71, 0x01, 0x0F])),
+                self._lednet(bytes([0x41, r, g, b, 0x00, 0x00, 0x00, 0x00,
+                                    0xF0, 0x0F]))]
+
+    def _p_lednetwf(self, on, r, g, b):
+        """The long-form framing newer LEDnetWF firmware wants."""
+        if not on:
+            return [self._wf(bytes([0x0D, 0x0E, 0x0B, 0x3B, 0x24, 0x00, 0x00,
+                                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x32,
+                                    0x00, 0x00, 0x90]))]
+        return [self._wf(bytes([0x0D, 0x0E, 0x0B, 0x3B, 0x23, 0x00, 0x00, 0x00,
+                                0x00, 0x00, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00,
+                                0x91])),
+                self._wf(bytes([0x0D, 0x0E, 0x0B, 0x3B, 0x41, 0x01, r, g, b,
+                                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3D,
+                                0x00, 0x00]))]
+
+    def _p_raw(self, on, r, g, b):
+        """Serial-passthrough modules that expect the three bytes and nothing else."""
+        return [bytes([r, g, b]) if on else bytes([0, 0, 0])]
 
     def _lednet(self, payload: bytes) -> bytes:
         """Wrap a LEDnetWF payload in its sequence/length header + checksum."""
         self._seq = (self._seq + 1) % 256
         body = bytes([self._seq, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, len(payload)]) + payload
         return body + bytes([sum(payload) & 0xFF])
+
+    def _wf(self, payload: bytes) -> bytes:
+        """Long-form framing: leading zero, sequence, then the payload verbatim."""
+        self._seq = (self._seq + 1) % 256
+        return bytes([0x00, self._seq, 0x80, 0x00, 0x00]) + payload
 
     async def _apply(self, state: State) -> None:
         if self._client is None or not self._client.is_connected:

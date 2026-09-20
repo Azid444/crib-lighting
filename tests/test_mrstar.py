@@ -50,8 +50,33 @@ def test_lednet_sequence_increments():
 
 def test_all_packet_bytes_are_valid():
     """Any byte >255 would raise at write time on real hardware."""
-    for proto in ("triones", "lednet"):
+    for proto in MrStarLight.PROTOCOLS:
         for bri in (0, 1, 127, 255):
             for col in ((0, 0, 0), (255, 255, 255), (37, 200, 91)):
                 for pkt in light(proto)._packets(State(True, bri, col)):
                     assert all(0 <= b <= 255 for b in pkt)
+
+
+@pytest.mark.parametrize("protocol", MrStarLight.PROTOCOLS)
+def test_every_dialect_carries_the_colour(protocol):
+    """Whatever the framing, the three colour bytes must appear in order."""
+    joined = b"".join(light(protocol)._packets(
+        State(on=True, brightness=255, color=(11, 22, 33))))
+    assert bytes([11, 22, 33]) in joined
+
+
+@pytest.mark.parametrize("protocol", MrStarLight.PROTOCOLS)
+def test_every_dialect_can_turn_off(protocol):
+    assert light(protocol)._packets(State(on=False))
+
+
+def test_unknown_protocol_is_rejected_loudly():
+    """A typo in config.yaml should say so, not silently send nothing."""
+    with pytest.raises(ValueError):
+        light("nonsense")._packets(State(on=True))
+
+
+def test_each_dialect_has_a_default_characteristic():
+    from crib.drivers.mrstar import DEFAULT_CHARS
+
+    assert set(MrStarLight.PROTOCOLS) <= set(DEFAULT_CHARS)

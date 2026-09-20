@@ -340,8 +340,11 @@ async def _hunt(target: str) -> None:
         print("background it), then run this again.")
         return
 
-    options = [(c["uuid"], p) for c in writable_candidates(info["characteristics"])
-               for p in ("triones", "lednet")]
+    from .drivers.mrstar import MrStarLight
+
+    options = [(c["uuid"], p)
+               for c in writable_candidates(info["characteristics"])
+               for p in MrStarLight.PROTOCOLS]
     if not options:
         print("This device has nothing writable, so it is not the light.")
         return
