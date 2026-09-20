@@ -216,15 +216,55 @@ from crib.probe import explain_error
 
 @pytest.mark.parametrize("error", [
     "Could not get GATT services: Unreachable",
-    "Device with address E9:DD:AE:0B:9C:51 was not found.",
     "Device is busy",
+    "Access denied",
 ])
-def test_busy_errors_point_at_the_phone_app(error):
+def test_refused_connections_point_at_the_phone_app(error):
     hint = explain_error(error)
     assert hint and "phone" in hint
+
+
+@pytest.mark.parametrize("error", [
+    "Device with address E9:DD:AE:0B:9C:51 was not found.",
+    "FF:23:12:04:20:F3 is not advertising - it may be powered off",
+])
+def test_not_advertising_is_diagnosed_separately(error):
+    """A different cause to a refused connection, so different advice."""
+    hint = explain_error(error)
+    assert hint and "advertising" in hint
 
 
 def test_unrelated_errors_get_no_invented_advice():
     assert explain_error("connected, but no known colour characteristic") is None
     assert explain_error(None) is None
     assert explain_error("") is None
+
+
+@pytest.mark.asyncio
+async def test_describe_scans_before_connecting(monkeypatch):
+    """Windows rejects a connect by raw address without a fresh scan."""
+    resolved = []
+
+    async def fake_resolve(address, timeout=10.0):
+        resolved.append(address)
+        return None
+
+    monkeypatch.setattr("crib.probe.resolve", fake_resolve)
+    from crib.probe import describe
+
+    result = await describe("FF:23:12:04:20:F3", attempts=2)
+    assert resolved == ["FF:23:12:04:20:F3"] * 2, "did not rescan between tries"
+    assert result["ok"] is False
+    assert "not advertising" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_a_device_that_never_advertises_is_reported_clearly(monkeypatch):
+    async def fake_resolve(address, timeout=10.0):
+        return None
+
+    monkeypatch.setattr("crib.probe.resolve", fake_resolve)
+    from crib.probe import describe, explain_error
+
+    result = await describe("AA:BB:CC:DD:EE:FF", attempts=1)
+    assert "advertising" in explain_error(result["error"])

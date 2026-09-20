@@ -275,7 +275,7 @@ WS     /ws                  state pushed to every open phone
 pip install pytest pytest-asyncio && python -m pytest
 ```
 
-167 tests, no hardware, sound card, or Spotify account required. Fake devices cover the
+175 tests, no hardware, sound card, or Spotify account required. Fake devices cover the
 engine and API, the MR-Star packet encoding is asserted byte by byte, and the
 beat detector is verified against synthesised tracks at known tempos. The
 WASAPI loopback selection is tested against a simulated Windows device tree,
@@ -335,6 +335,12 @@ connection at a time.
 **The scan finds nothing at all.** Lights must be powered on and the PC on the
 same WiFi. The wizard also has a *"Add something by hand"* section, so a
 missed device is never a dead end.
+
+**"Device with address ... was not found" on Windows.** WinRT will not connect
+by address alone — it needs a recent advertisement for that device. The tools
+and the driver scan immediately before connecting for this reason. If it still
+reports the device as not advertising, it is powered off, out of range, or an
+app still holds it.
 
 **MR-Star never connects.** `bleak` uses the Windows WinRT Bluetooth stack,
 which needs Windows 10 or newer and a BLE-capable adapter (most built-in WiFi

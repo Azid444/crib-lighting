@@ -36,16 +36,22 @@ def is_private_address(address: str) -> bool:
 
 # Connection errors that mean "something else already has this device".
 # These boards accept exactly one connection, so the phone app wins.
-BUSY_ERRORS = ("unreachable", "was not found", "not connected",
-               "device is busy", "access denied")
+BUSY_ERRORS = ("unreachable", "not connected", "device is busy",
+               "access denied", "already connected")
 
 
 def explain_error(error: str | None) -> str | None:
     """Turn a BLE error into something worth acting on."""
     if not error:
         return None
-    if any(marker in error.lower() for marker in BUSY_ERRORS):
-        return ("the device did not accept a connection - it is usually still "
+    lowered = error.lower()
+    # Checked first: the not-advertising message mentions other apps too, and
+    # would otherwise be mistaken for a refused connection.
+    if "not advertising" in lowered or "was not found" in lowered:
+        return ("the device was not advertising during the scan - power it on, "
+                "move closer, and make sure no app is holding it")
+    if any(marker in lowered for marker in BUSY_ERRORS):
+        return ("the device refused the connection - it is usually still "
                 "connected to its app on your phone; force-close that app and "
                 "retry")
     return None
@@ -65,6 +71,23 @@ def rank(entry: dict) -> tuple:
     )
 
 
+async def resolve(address: str, timeout: float = 10.0):
+    """Find a device's live advertisement before connecting to it.
+
+    Windows will not connect by address alone: WinRT needs a recent
+    advertisement for that address or it reports "was not found", even with
+    the device sitting right there. Scanning first and handing over the
+    resolved object is what makes connecting work.
+    """
+    from bleak import BleakScanner
+
+    try:
+        return await BleakScanner.find_device_by_address(address, timeout=timeout)
+    except Exception as exc:
+        log.debug("could not resolve %s: %s", address, exc)
+        return None
+
+
 async def describe(address: str, timeout: float = 15.0,
                    attempts: int = 2) -> dict:
     """Full GATT table for one device.
@@ -76,8 +99,17 @@ async def describe(address: str, timeout: float = 15.0,
 
     last = None
     for attempt in range(attempts):
+        # Resolve every attempt: the advertisement may have aged out.
+        target = await resolve(address)
+        if target is None:
+            last = (f"{address} is not advertising - it may be powered off, "
+                    f"out of range, or already connected to another app")
+            if attempt + 1 < attempts:
+                await asyncio.sleep(1.0)
+                continue
+            break
         try:
-            async with BleakClient(address, timeout=timeout) as client:
+            async with BleakClient(target, timeout=timeout) as client:
                 out = []
                 for service in client.services:
                     for ch in service.characteristics:
