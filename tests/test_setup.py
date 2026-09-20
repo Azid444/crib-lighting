@@ -222,3 +222,33 @@ def test_a_picked_candidate_can_be_saved(fresh):
     assert client.post("/api/setup/save", json={"devices": [picked]}).status_code == 200
     saved = load_config(path)["devices"][0]
     assert saved["protocol"] == "lednet" and "_likely" not in saved
+
+
+def test_wizard_offers_manual_entry_for_every_device_type(fresh):
+    """If a scan finds nothing, there must still be a way to add each light."""
+    client, _ = fresh
+    html = client.get("/setup").text
+    for field in ('id="mwled"', 'id="mble"', 'id="mtip"', 'id="mtid"',
+                  'id="mtkey"', 'id="addble2"'):
+        assert field in html, field
+
+
+def test_manually_added_bluetooth_light_saves(fresh):
+    client, path = fresh
+    manual = {"driver": "mrstar", "id": "tv", "name": "TV Backlight",
+              "address": "AA:BB:CC:DD:EE:FF", "protocol": "triones",
+              "_detail": "added by hand"}
+    assert client.post("/api/setup/save", json={"devices": [manual]}).status_code == 200
+    saved = load_config(path)["devices"][0]
+    assert saved["address"] == "AA:BB:CC:DD:EE:FF"
+    assert saved["protocol"] == "triones" and "_detail" not in saved
+
+
+def test_manually_added_tuya_with_a_key_saves(fresh):
+    client, path = fresh
+    manual = {"driver": "tuya", "id": "ceiling", "name": "Room Lights",
+              "address": "192.168.1.60", "device_id": "abc",
+              "local_key": "secret", "version": 3.3}
+    client.post("/api/setup/save", json={"devices": [manual]})
+    saved = load_config(path)["devices"][0]
+    assert saved["local_key"] == "secret" and saved["device_id"] == "abc"

@@ -160,10 +160,17 @@ function renderNotes() {
 
 // Bluetooth devices that did not identify themselves as lights, plus a way
 // to add anything by hand. Discovery failing must never be a dead end.
+function addDevice(device) {
+  found.push(device);
+  render();
+  renderExtras();
+}
+
+// Always available, scan or no scan: if Bluetooth found nothing at all there
+// is nothing to pick from, and the user still needs a way in.
 function renderExtras() {
   const box = $('#extras');
   box.innerHTML = '';
-  if (!candidates.length && !found.length) return;
 
   if (candidates.length) {
     const d = document.createElement('details');
@@ -171,25 +178,25 @@ function renderExtras() {
       + `(${candidates.length} other Bluetooth device`
       + `${candidates.length > 1 ? 's' : ''})</summary>
       <div class="note">These did not announce themselves as lights, but the
-        MR-Star often does not. If you recognise one, add it — if the colours
-        do nothing afterwards, come back and try the other protocol.</div>
+        MR-Star often does not. Pick yours and choose a protocol — try
+        <b>triones</b> first; if the colours do nothing afterwards, come back
+        and try <b>lednet</b>.</div>
       <div id="cands"></div>`;
     box.append(d);
 
     candidates.forEach(c => {
       const row = document.createElement('div');
       row.className = 'pick';
-      row.innerHTML = `<div class="b"></div>`;
+      row.innerHTML = '<div class="b"></div>';
       row.querySelector('.b').innerHTML =
         `${c.name || 'unnamed'}<div class="mono">${c.address}</div>`;
       for (const proto of ['triones', 'lednet']) {
         const b = document.createElement('button');
         b.textContent = proto;
         b.onclick = () => {
-          found.push({...c, protocol: proto, _likely: true,
-                      _detail: `${c.name || c.address} (${proto} protocol)`});
           candidates = candidates.filter(x => x !== c);
-          render(); renderExtras();
+          addDevice({...c, protocol: proto, _likely: true,
+                     _detail: `${c.name || c.address} (${proto} protocol)`});
         };
         row.append(b);
       }
@@ -198,20 +205,57 @@ function renderExtras() {
   }
 
   const manual = document.createElement('details');
-  manual.innerHTML = `<summary>Add something by hand</summary>
-    <div class="note">Only needed if the scan missed a device you know is
-      there.</div>
-    <input type="text" id="mwled" placeholder="WLED IP address, e.g. 192.168.1.50">
-    <button id="addwled" style="margin-top:8px">Add WLED strip</button>`;
+  manual.innerHTML = `<summary>Add a light by hand</summary>
+    <div class="note">Use this if the scan missed something you know is there.
+      For the TV backlight you need its Bluetooth address — run
+      <code>.venv\Scripts\python.exe -m crib.scan</code> in the project
+      folder to list them.</div>
+
+    <div class="mono" style="margin-top:14px">WLED STRIP</div>
+    <input type="text" id="mwled" placeholder="IP address, e.g. 192.168.1.50">
+    <button id="addwled" style="margin-top:8px">Add WLED strip</button>
+
+    <div class="mono" style="margin-top:18px">TV BACKLIGHT (BLUETOOTH)</div>
+    <input type="text" id="mble" placeholder="Address, e.g. AA:BB:CC:DD:EE:FF">
+    <button id="addble" style="margin-top:8px">Add as triones</button>
+    <button id="addble2" style="margin-top:6px">Add as lednet</button>
+
+    <div class="mono" style="margin-top:18px">TUYA WALL SWITCH</div>
+    <input type="text" id="mtip" placeholder="IP address">
+    <input type="text" id="mtid" placeholder="Device ID">
+    <input type="text" id="mtkey" placeholder="Local key">
+    <button id="addtuya" style="margin-top:8px">Add wall switch</button>`;
   box.append(manual);
+
+  const val = id => manual.querySelector('#' + id).value.trim();
+  const clear = (...ids) => ids.forEach(i => manual.querySelector('#' + i).value = '');
+
   manual.querySelector('#addwled').onclick = () => {
-    const host = manual.querySelector('#mwled').value.trim();
-    if (!host) return;
-    found.push({driver: 'wled', id: 'strip', name: 'WLED Strip', host,
-                _detail: `added by hand (${host})`});
-    manual.querySelector('#mwled').value = '';
-    render(); renderExtras();
+    if (!val('mwled')) return;
+    addDevice({driver: 'wled', id: 'strip', name: 'WLED Strip',
+               host: val('mwled'), _detail: `added by hand (${val('mwled')})`});
+    clear('mwled');
   };
+
+  for (const [id, proto] of [['addble', 'triones'], ['addble2', 'lednet']])
+    manual.querySelector('#' + id).onclick = () => {
+      if (!val('mble')) return;
+      addDevice({driver: 'mrstar', id: 'tv', name: 'TV Backlight',
+                 address: val('mble'), protocol: proto,
+                 _detail: `added by hand (${proto} protocol)`});
+      clear('mble');
+    };
+
+  manual.querySelector('#addtuya').onclick = () => {
+    if (!val('mtip') || !val('mtid')) return;
+    addDevice({driver: 'tuya', id: 'ceiling', name: 'Room Lights',
+               address: val('mtip'), device_id: val('mtid'),
+               local_key: val('mtkey'), version: 3.3,
+               _detail: `added by hand (${val('mtip')})`});
+    clear('mtip', 'mtid', 'mtkey');
+  };
+
+  $('#finish').style.display = 'block';
 }
 
 $('#scan').onclick = async () => {
@@ -268,6 +312,8 @@ $('#save').onclick = async () => {
 };
 
 // If a config already exists, offer the normal UI instead.
+renderExtras();
+
 fetch('/api/setup/state').then(r => r.json()).then(s => {
   if (!s.needs_setup) {
     show('Already set up — <a href="/">open your lights</a>. '
