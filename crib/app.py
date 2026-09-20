@@ -108,8 +108,15 @@ async def setup_scan() -> dict:
 
     global _found
     results = await discover_all(timeout=10.0)
-    _found = [d for group in results.values() for d in group]
-    return {"found": _found, "counts": {k: len(v) for k, v in results.items()}}
+    _found = [d for key in ("wled", "mrstar", "tuya") for d in results[key]]
+    return {
+        "found": _found,
+        # Unidentified Bluetooth devices, for the user to pick from when
+        # nothing advertised itself as a light.
+        "candidates": results["candidates"],
+        "notes": results["notes"],
+        "counts": {k: len(results[k]) for k in ("wled", "mrstar", "tuya")},
+    }
 
 
 class SaveBody(BaseModel):

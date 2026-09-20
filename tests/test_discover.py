@@ -130,3 +130,108 @@ async def test_non_wled_http_servers_are_not_matched(monkeypatch):
         assert await find_wled(timeout=4.0) == []
     finally:
         await runner.cleanup()
+
+
+# --- BLE matching ---------------------------------------------------------
+
+from crib.discover import _ble_entry, discover_all, find_tuya
+
+
+def test_service_uuid_beats_a_useless_name():
+    """The reliable signal: a controller advertising the Triones service."""
+    e = _ble_entry("AA:BB", "BLE-2842", ["0000ffd9-0000-1000-8000-00805f9b34fb"])
+    assert e["_likely"] and e["protocol"] == "triones"
+
+
+def test_lednet_service_selects_that_protocol():
+    e = _ble_entry("AA:BB", "", ["0000ff01-0000-1000-8000-00805f9b34fb"])
+    assert e["_likely"] and e["protocol"] == "lednet"
+
+
+def test_uuid_case_does_not_matter():
+    e = _ble_entry("AA:BB", "", ["0000FFD9-0000-1000-8000-00805F9B34FB"])
+    assert e["_likely"]
+
+
+def test_name_match_still_works_without_uuids():
+    assert _ble_entry("AA:BB", "MRSTAR-99", [])["_likely"]
+    assert _ble_entry("AA:BB", "LEDnetWF01", [])["protocol"] == "lednet"
+
+
+def test_unknown_devices_are_kept_but_not_flagged():
+    """A pair of headphones should be offered, not hidden and not guessed."""
+    e = _ble_entry("AA:BB", "AirPods", [])
+    assert not e["_likely"]
+    assert e["address"] == "AA:BB" and e["driver"] == "mrstar"
+
+
+def test_unnamed_device_is_described_by_address():
+    assert "AA:BB" in _ble_entry("AA:BB", "", [])["_detail"]
+
+
+# --- diagnostics ----------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_tuya_reports_why_it_heard_nothing(monkeypatch):
+    found, note = await find_tuya(timeout=0.05)
+    assert found == []
+    assert note and ("6666" in note or "ports" in note)
+
+
+@pytest.mark.asyncio
+async def test_tuya_reports_a_blocked_port(monkeypatch):
+    """Binding failures must be surfaced, not silently swallowed."""
+    async def boom(*a, **kw):
+        raise OSError("address already in use")
+
+    loop = asyncio.get_event_loop()
+    monkeypatch.setattr(loop, "create_datagram_endpoint", boom)
+    found, note = await find_tuya(timeout=0.05)
+    assert found == [] and "already in use" in note
+
+
+@pytest.mark.asyncio
+async def test_discover_all_explains_every_empty_category(monkeypatch):
+    async def no_wled(*a, **kw): return []
+    async def no_ble(*a, **kw): return [], [], "Bluetooth is off"
+    async def no_tuya(*a, **kw): return [], "firewall maybe"
+
+    monkeypatch.setattr("crib.discover.find_wled", no_wled)
+    monkeypatch.setattr("crib.discover.find_mrstar", no_ble)
+    monkeypatch.setattr("crib.discover.find_tuya", no_tuya)
+
+    result = await discover_all(timeout=0.1)
+    assert result["notes"]["wled"] and result["notes"]["mrstar"]
+    assert result["notes"]["tuya"] == "firewall maybe"
+    assert result["candidates"] == []
+
+
+@pytest.mark.asyncio
+async def test_one_finder_crashing_does_not_sink_the_others(monkeypatch):
+    async def wled(*a, **kw):
+        return [{"driver": "wled", "id": "strip", "host": "1.2.3.4"}]
+    async def ble_boom(*a, **kw): raise RuntimeError("no adapter")
+    async def no_tuya(*a, **kw): return [], None
+
+    monkeypatch.setattr("crib.discover.find_wled", wled)
+    monkeypatch.setattr("crib.discover.find_mrstar", ble_boom)
+    monkeypatch.setattr("crib.discover.find_tuya", no_tuya)
+
+    result = await discover_all(timeout=0.1)
+    assert len(result["wled"]) == 1
+    assert result["mrstar"] == [] and "no adapter" in result["notes"]["mrstar"]
+
+
+@pytest.mark.asyncio
+async def test_candidates_are_passed_through(monkeypatch):
+    other = _ble_entry("AA:BB", "AirPods", [])
+    async def no_wled(*a, **kw): return []
+    async def ble(*a, **kw): return [], [other], "none identified"
+    async def no_tuya(*a, **kw): return [], None
+
+    monkeypatch.setattr("crib.discover.find_wled", no_wled)
+    monkeypatch.setattr("crib.discover.find_mrstar", ble)
+    monkeypatch.setattr("crib.discover.find_tuya", no_tuya)
+
+    result = await discover_all(timeout=0.1)
+    assert result["candidates"] == [other]

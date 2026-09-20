@@ -275,7 +275,7 @@ WS     /ws                  state pushed to every open phone
 pip install pytest pytest-asyncio && python -m pytest
 ```
 
-125 tests, no hardware, sound card, or Spotify account required. Fake devices cover the
+141 tests, no hardware, sound card, or Spotify account required. Fake devices cover the
 engine and API, the MR-Star packet encoding is asserted byte by byte, and the
 beat detector is verified against synthesised tracks at known tempos. The
 WASAPI loopback selection is tested against a simulated Windows device tree,
@@ -291,8 +291,28 @@ above. Check both devices are on the same WiFi, and that your network is set
 to *Private* rather than *Public* in Windows settings, since the firewall rule
 only covers private networks.
 
-**The scan finds nothing.** Lights must be powered on and the PC on the same
-WiFi as them. Bluetooth devices must not be paired in Windows settings.
+**The scan finds no Tuya switch.** Tuya devices announce themselves with
+inbound UDP broadcasts on ports 6666 and 6667, which the Windows firewall
+blocks by default. Running `setup.ps1` as Administrator opens them, or do it
+directly in an admin PowerShell:
+
+```powershell
+New-NetFirewallRule -DisplayName "crib-lighting (Tuya discovery)" `
+    -Direction Inbound -LocalPort 6666,6667 -Protocol UDP `
+    -Action Allow -Profile Private
+```
+
+**The scan finds no Bluetooth light.** These controllers are white-labelled
+and many advertise nothing that identifies them. The wizard lists every other
+Bluetooth device it saw under *"Don't see your TV backlight?"* — pick yours
+and choose a protocol (try `triones` first, then `lednet`). The device must be
+powered on and **not paired** in Windows Bluetooth settings, and not currently
+connected to the vendor app on your phone, since these boards accept only one
+connection at a time.
+
+**The scan finds nothing at all.** Lights must be powered on and the PC on the
+same WiFi. The wizard also has a *"Add something by hand"* section, so a
+missed device is never a dead end.
 
 **MR-Star never connects.** `bleak` uses the Windows WinRT Bluetooth stack,
 which needs Windows 10 or newer and a BLE-capable adapter (most built-in WiFi

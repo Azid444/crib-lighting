@@ -92,8 +92,17 @@ if ($admin) {
     if (-not (Get-NetFirewallRule -DisplayName "crib-lighting" -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName "crib-lighting" -Direction Inbound `
             -LocalPort 8080 -Protocol TCP -Action Allow -Profile Private | Out-Null
-        Good "Port 8080 opened for private networks."
-    } else { Good "Already allowed." }
+        Good "Port 8080 opened, so your phone can reach it."
+    } else { Good "Phone access already allowed." }
+
+    # Tuya devices announce themselves by broadcasting on these UDP ports.
+    # Without this the switch is simply never heard from.
+    if (-not (Get-NetFirewallRule -DisplayName "crib-lighting (Tuya discovery)" -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName "crib-lighting (Tuya discovery)" `
+            -Direction Inbound -LocalPort 6666,6667 -Protocol UDP `
+            -Action Allow -Profile Private | Out-Null
+        Good "UDP 6666/6667 opened, so Tuya switches can be discovered."
+    } else { Good "Tuya discovery already allowed." }
 } else {
     Warn "Not running as Administrator, so the firewall rule was skipped."
     Warn "If your phone cannot connect later, re-run this as Admin."

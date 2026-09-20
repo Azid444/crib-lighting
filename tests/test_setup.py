@@ -190,3 +190,35 @@ def test_main_survives_a_config_with_no_server_section(tmp_path, monkeypatch):
                         lambda app, host, port: called.update(port=port))
     appmod.main()
     assert called["port"] == 8080
+
+
+def test_scan_returns_candidates_and_notes(fresh, monkeypatch):
+    """The wizard needs the diagnostics, not just a count of zero."""
+    client, _ = fresh
+
+    async def fake(timeout=10.0):
+        return {
+            "wled": [WLED], "mrstar": [], "tuya": [],
+            "candidates": [{"driver": "mrstar", "address": "AA:BB",
+                            "name": "Unknown", "_likely": False}],
+            "notes": {"tuya": "firewall blocks udp"},
+        }
+
+    monkeypatch.setattr("crib.discover.discover_all", fake)
+    body = client.post("/api/setup/scan").json()
+    assert body["counts"] == {"wled": 1, "mrstar": 0, "tuya": 0}
+    assert body["notes"]["tuya"] == "firewall blocks udp"
+    assert len(body["candidates"]) == 1
+    # Candidates must not be silently saved as real devices.
+    assert body["found"] == [WLED]
+
+
+def test_a_picked_candidate_can_be_saved(fresh):
+    """Adding a device by hand from the candidate list must work."""
+    client, path = fresh
+    picked = {"driver": "mrstar", "id": "tv", "name": "Unknown",
+              "address": "AA:BB:CC:DD:EE:FF", "protocol": "lednet",
+              "_detail": "picked", "_likely": True}
+    assert client.post("/api/setup/save", json={"devices": [picked]}).status_code == 200
+    saved = load_config(path)["devices"][0]
+    assert saved["protocol"] == "lednet" and "_likely" not in saved

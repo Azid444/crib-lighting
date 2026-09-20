@@ -48,6 +48,18 @@
   .msg{border-radius:12px;padding:12px;margin:12px 0;font-size:14px;display:none}
   .msg.err{background:#3a1520;border:1px solid #6b2436;display:block}
   .msg.good{background:#12351f;border:1px solid #1f5c33;display:block}
+  .hint{background:#2a2410;border:1px solid #4a4020;border-radius:12px;
+        padding:12px;margin-bottom:10px;font-size:13px;color:#e8d9a0;
+        line-height:1.5}
+  .pick{background:#0e0e15;border:1px solid var(--line);border-radius:10px;
+        padding:10px 12px;margin-bottom:6px;display:flex;gap:10px;
+        align-items:center}
+  .pick .b{flex:1;min-width:0;font-size:14px;overflow:hidden;
+           text-overflow:ellipsis;white-space:nowrap}
+  .pick button{width:auto;min-height:36px;padding:6px 14px;font-size:13px;
+               border-radius:8px}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;
+        color:var(--dim)}
 </style>
 </head>
 <body>
@@ -57,7 +69,9 @@
   <button class="primary" id="scan">Scan for my lights</button>
   <div class="msg" id="msg"></div>
 
+  <div id="notes"></div>
   <div id="results"></div>
+  <div id="extras"></div>
 
   <div id="finish" style="display:none">
     <h2>Spotify (optional)</h2>
@@ -79,7 +93,7 @@
 
 <script>
 const $ = s => document.querySelector(s);
-let found = [];
+let found = [], candidates = [], notes = {};
 
 function show(text, kind) {
   const m = $('#msg');
@@ -133,6 +147,73 @@ function render() {
   $('#finish').style.display = 'block';
 }
 
+function renderNotes() {
+  const box = $('#notes');
+  box.innerHTML = '';
+  for (const text of Object.values(notes)) {
+    const el = document.createElement('div');
+    el.className = 'hint';
+    el.textContent = text;
+    box.append(el);
+  }
+}
+
+// Bluetooth devices that did not identify themselves as lights, plus a way
+// to add anything by hand. Discovery failing must never be a dead end.
+function renderExtras() {
+  const box = $('#extras');
+  box.innerHTML = '';
+  if (!candidates.length && !found.length) return;
+
+  if (candidates.length) {
+    const d = document.createElement('details');
+    d.innerHTML = `<summary>Don't see your TV backlight? `
+      + `(${candidates.length} other Bluetooth device`
+      + `${candidates.length > 1 ? 's' : ''})</summary>
+      <div class="note">These did not announce themselves as lights, but the
+        MR-Star often does not. If you recognise one, add it — if the colours
+        do nothing afterwards, come back and try the other protocol.</div>
+      <div id="cands"></div>`;
+    box.append(d);
+
+    candidates.forEach(c => {
+      const row = document.createElement('div');
+      row.className = 'pick';
+      row.innerHTML = `<div class="b"></div>`;
+      row.querySelector('.b').innerHTML =
+        `${c.name || 'unnamed'}<div class="mono">${c.address}</div>`;
+      for (const proto of ['triones', 'lednet']) {
+        const b = document.createElement('button');
+        b.textContent = proto;
+        b.onclick = () => {
+          found.push({...c, protocol: proto, _likely: true,
+                      _detail: `${c.name || c.address} (${proto} protocol)`});
+          candidates = candidates.filter(x => x !== c);
+          render(); renderExtras();
+        };
+        row.append(b);
+      }
+      d.querySelector('#cands').append(row);
+    });
+  }
+
+  const manual = document.createElement('details');
+  manual.innerHTML = `<summary>Add something by hand</summary>
+    <div class="note">Only needed if the scan missed a device you know is
+      there.</div>
+    <input type="text" id="mwled" placeholder="WLED IP address, e.g. 192.168.1.50">
+    <button id="addwled" style="margin-top:8px">Add WLED strip</button>`;
+  box.append(manual);
+  manual.querySelector('#addwled').onclick = () => {
+    const host = manual.querySelector('#mwled').value.trim();
+    if (!host) return;
+    found.push({driver: 'wled', id: 'strip', name: 'WLED Strip', host,
+                _detail: `added by hand (${host})`});
+    manual.querySelector('#mwled').value = '';
+    render(); renderExtras();
+  };
+}
+
 $('#scan').onclick = async () => {
   const btn = $('#scan');
   btn.disabled = true;
@@ -143,15 +224,18 @@ $('#scan').onclick = async () => {
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     found = data.found;
+    candidates = data.candidates || [];
+    notes = data.notes || {};
+    renderNotes();
     if (!found.length) {
-      show('Nothing found. Check the lights are on and that this PC is on the '
-        + 'same WiFi. Bluetooth devices need to be unpaired in Windows settings.',
-        'err');
+      show('No lights identified themselves. See the notes below — you can '
+        + 'still add devices by hand.', 'err');
     } else {
       const c = data.counts;
       show(`Found ${c.wled} WLED, ${c.mrstar} Bluetooth, ${c.tuya} Tuya.`, 'good');
     }
     render();
+    renderExtras();
   } catch (e) {
     show('Scan failed: ' + (e.message || e), 'err');
   } finally {
