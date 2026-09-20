@@ -229,7 +229,7 @@ def test_wizard_offers_manual_entry_for_every_device_type(fresh):
     client, _ = fresh
     html = client.get("/setup").text
     for field in ('id="mwled"', 'id="mble"', 'id="mtip"', 'id="mtid"',
-                  'id="mtkey"', 'id="addble2"'):
+                  'id="mtkey"', 'id="mbleproto"'):
         assert field in html, field
 
 
@@ -297,3 +297,15 @@ def test_wizard_offers_the_backlight_finder(fresh):
     client, _ = fresh
     html = client.get("/setup").text
     assert 'id="auto"' in html and "Find my TV backlight" in html
+
+
+def test_wizard_offers_exactly_the_protocols_the_driver_implements():
+    """A dialect listed here but not implemented would save a dead config."""
+    import pathlib
+    import re
+
+    from crib.drivers.mrstar import MrStarLight
+
+    page = pathlib.Path("crib/web/setup.html").read_text()
+    listed = re.search(r"const PROTOCOLS = \[(.*?)\];", page, re.S).group(1)
+    assert re.findall(r"'([a-z_]+)'", listed) == list(MrStarLight.PROTOCOLS)

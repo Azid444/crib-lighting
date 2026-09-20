@@ -103,6 +103,11 @@
 const $ = s => document.querySelector(s);
 let found = [], candidates = [], notes = {};
 
+// The Bluetooth dialects the driver can encode, most likely first. Kept in
+// step with MrStarLight.PROTOCOLS by a test.
+const PROTOCOLS = ['findn', 'triones', 'elk', 'elk_alt', 'lednet',
+                   'lednetwf', 'raw'];
+
 function show(text, kind) {
   const m = $('#msg');
   m.className = 'msg ' + kind;
@@ -187,8 +192,10 @@ function renderExtras() {
       + `${candidates.length > 1 ? 's' : ''})</summary>
       <div class="note">These did not announce themselves as lights, but the
         MR-Star often does not. Pick yours and choose a protocol — try
-        <b>triones</b> first; if the colours do nothing afterwards, come back
-        and try <b>lednet</b>.</div>
+        <b>findn</b> first (that is the MR-Star stock board, which advertises
+        as GATT--DEMO). If the colours do nothing afterwards, run
+        <code>python -m crib.probe --hunt &lt;name&gt;</code>, which tries
+        every protocol and asks what you saw.</div>
       <div id="cands"></div>`;
     box.append(d);
 
@@ -198,7 +205,7 @@ function renderExtras() {
       row.innerHTML = '<div class="b"></div>';
       row.querySelector('.b').innerHTML =
         `${c.name || 'unnamed'}<div class="mono">${c.address}</div>`;
-      for (const proto of ['triones', 'lednet']) {
+      for (const proto of PROTOCOLS) {
         const b = document.createElement('button');
         b.textContent = proto;
         b.onclick = () => {
@@ -215,18 +222,21 @@ function renderExtras() {
   const manual = document.createElement('details');
   manual.innerHTML = `<summary>Add a light by hand</summary>
     <div class="note">Use this if the scan missed something you know is there.
-      For the TV backlight you need its Bluetooth address — run
+      For the TV backlight, its advertised name works as well as its address
+      — and survives better, because these boards pick a new address every
+      time they are power-cycled. Run
       <code>.venv\Scripts\python.exe -m crib.scan</code> in the project
-      folder to list them.</div>
+      folder to list what is nearby.</div>
 
     <div class="mono" style="margin-top:14px">WLED STRIP</div>
     <input type="text" id="mwled" placeholder="IP address, e.g. 192.168.1.50">
     <button id="addwled" style="margin-top:8px">Add WLED strip</button>
 
     <div class="mono" style="margin-top:18px">TV BACKLIGHT (BLUETOOTH)</div>
-    <input type="text" id="mble" placeholder="Address, e.g. AA:BB:CC:DD:EE:FF">
-    <button id="addble" style="margin-top:8px">Add as triones</button>
-    <button id="addble2" style="margin-top:6px">Add as lednet</button>
+    <input type="text" id="mble" placeholder="Address or name, e.g. GATT--DEMO">
+    <select id="mbleproto">${PROTOCOLS.map(p =>
+      `<option value="${p}">${p}</option>`).join('')}</select>
+    <button id="addble" style="margin-top:8px">Add TV backlight</button>
 
     <div class="mono" style="margin-top:18px">TUYA WALL SWITCH</div>
     <input type="text" id="mtip" placeholder="IP address">
@@ -245,14 +255,14 @@ function renderExtras() {
     clear('mwled');
   };
 
-  for (const [id, proto] of [['addble', 'triones'], ['addble2', 'lednet']])
-    manual.querySelector('#' + id).onclick = () => {
-      if (!val('mble')) return;
-      addDevice({driver: 'mrstar', id: 'tv', name: 'TV Backlight',
-                 address: val('mble'), protocol: proto,
-                 _detail: `added by hand (${proto} protocol)`});
-      clear('mble');
-    };
+  manual.querySelector('#addble').onclick = () => {
+    if (!val('mble')) return;
+    const proto = manual.querySelector('#mbleproto').value;
+    addDevice({driver: 'mrstar', id: 'tv', name: 'TV Backlight',
+               address: val('mble'), protocol: proto,
+               _detail: `added by hand (${proto} protocol)`});
+    clear('mble');
+  };
 
   manual.querySelector('#addtuya').onclick = () => {
     if (!val('mtip') || !val('mtid')) return;

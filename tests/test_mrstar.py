@@ -131,3 +131,57 @@ def test_each_dialect_has_a_default_characteristic():
     from crib.drivers.mrstar import DEFAULT_CHARS
 
     assert set(MrStarLight.PROTOCOLS) <= set(DEFAULT_CHARS)
+
+
+@pytest.mark.asyncio
+async def test_connect_resolves_by_name_not_just_address(monkeypatch):
+    """These boards change address on every power cycle; the name does not."""
+    import crib.probe
+
+    asked = []
+
+    async def fake_resolve(target, timeout=10.0):
+        asked.append(target)
+        return "device-object"
+
+    seen = {}
+
+    class FakeClient:
+        def __init__(self, target, timeout=None):
+            seen["target"] = target
+
+        async def connect(self):
+            return None
+
+    monkeypatch.setattr(crib.probe, "resolve", fake_resolve)
+    monkeypatch.setattr("crib.drivers.mrstar.BleakClient", FakeClient)
+
+    l = MrStarLight("tv", "TV", "GATT--DEMO", protocol="findn")
+    await l.connect()
+    assert asked == ["GATT--DEMO"]
+    assert seen["target"] == "device-object"
+    assert l.available is True
+
+
+@pytest.mark.asyncio
+async def test_connect_falls_back_to_the_raw_address(monkeypatch):
+    """If the scan misses it, connecting by address may still work."""
+    import crib.probe
+
+    async def no_luck(target, timeout=10.0):
+        return None
+
+    seen = {}
+
+    class FakeClient:
+        def __init__(self, target, timeout=None):
+            seen["target"] = target
+
+        async def connect(self):
+            return None
+
+    monkeypatch.setattr(crib.probe, "resolve", no_luck)
+    monkeypatch.setattr("crib.drivers.mrstar.BleakClient", FakeClient)
+
+    await MrStarLight("tv", "TV", "AA:BB:CC:DD:EE:FF").connect()
+    assert seen["target"] == "AA:BB:CC:DD:EE:FF"

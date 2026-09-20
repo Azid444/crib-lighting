@@ -56,15 +56,17 @@ class MrStarLight(Light):
         self._last_bri: int | None = None
 
     async def connect(self) -> None:
-        from bleak import BleakScanner
-
         # Windows will not connect by address alone: WinRT needs a recent
-        # advertisement or it reports the device as not found. Falling back to
-        # the raw address keeps Linux and macOS working if the scan misses it.
+        # advertisement or it reports the device as not found. resolve() also
+        # accepts a name, which matters because these boards use random static
+        # addresses that change whenever the light is power-cycled -- putting
+        # the name in config.yaml survives that. Falling back to the raw
+        # address keeps things working if the scan happens to miss it.
+        from ..probe import resolve
+
         target = None
         try:
-            target = await BleakScanner.find_device_by_address(
-                self.address, timeout=10.0)
+            target = await resolve(self.address, timeout=10.0)
         except Exception:
             pass
         self._client = BleakClient(target or self.address, timeout=15.0)
