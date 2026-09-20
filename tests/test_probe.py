@@ -268,3 +268,83 @@ async def test_a_device_that_never_advertises_is_reported_clearly(monkeypatch):
 
     result = await describe("AA:BB:CC:DD:EE:FF", attempts=1)
     assert "advertising" in explain_error(result["error"])
+
+
+# --- resolving by address or name ----------------------------------------
+
+from crib.probe import looks_like_address
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("FF:23:12:04:20:F3", True),
+    ("ff:23:12:04:20:f3", True),
+    ("GATT--DEMO", False),
+    ("", False),
+    ("FF:23:12:04:20", False),
+    ("6AFB142B-AE21-C121-A549-D2678CFB83AB", False),   # iOS identifier
+])
+def test_address_detection(value, expected):
+    assert looks_like_address(value) is expected
+
+
+class FakeDevice:
+    def __init__(self, address):
+        self.address = address
+        self.name = ""
+
+
+@pytest.mark.asyncio
+async def test_resolves_by_name_when_the_address_changed(monkeypatch):
+    """These chips get a new random address after a power cycle."""
+    async def fake_nearby(timeout=10.0):
+        return [{"address": "AA:11:22:33:44:55", "name": "GATT--DEMO",
+                 "rssi": -70, "device": FakeDevice("AA:11:22:33:44:55")}]
+
+    monkeypatch.setattr("crib.probe.nearby", fake_nearby)
+    from crib.probe import resolve
+
+    found = await resolve("GATT--DEMO")
+    assert found.address == "AA:11:22:33:44:55"
+
+
+@pytest.mark.asyncio
+async def test_name_match_is_case_insensitive(monkeypatch):
+    async def fake_nearby(timeout=10.0):
+        return [{"address": "AA:11:22:33:44:55", "name": "GATT--DEMO",
+                 "rssi": -70, "device": FakeDevice("AA:11:22:33:44:55")}]
+
+    monkeypatch.setattr("crib.probe.nearby", fake_nearby)
+    from crib.probe import resolve
+
+    assert await resolve("gatt--demo") is not None
+
+
+@pytest.mark.asyncio
+async def test_a_stale_address_falls_back_to_a_full_scan(monkeypatch):
+    """Address lookup missing must not end the search."""
+    async def fake_nearby(timeout=10.0):
+        return [{"address": "AA:11:22:33:44:55", "name": "other",
+                 "rssi": -70, "device": FakeDevice("AA:11:22:33:44:55")}]
+
+    async def no_such_address(address, timeout=10.0):
+        return None
+
+    import bleak
+    monkeypatch.setattr(bleak.BleakScanner, "find_device_by_address",
+                        staticmethod(no_such_address))
+    monkeypatch.setattr("crib.probe.nearby", fake_nearby)
+    from crib.probe import resolve
+
+    assert await resolve("FF:23:12:04:20:F3") is None
+    assert (await resolve("AA:11:22:33:44:55")).address == "AA:11:22:33:44:55"
+
+
+@pytest.mark.asyncio
+async def test_resolve_returns_none_when_nothing_is_advertising(monkeypatch):
+    async def fake_nearby(timeout=10.0):
+        return []
+
+    monkeypatch.setattr("crib.probe.nearby", fake_nearby)
+    from crib.probe import resolve
+
+    assert await resolve("GATT--DEMO") is None

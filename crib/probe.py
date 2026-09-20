@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sys
 
 log = logging.getLogger(__name__)
@@ -71,21 +72,52 @@ def rank(entry: dict) -> tuple:
     )
 
 
-async def resolve(address: str, timeout: float = 10.0):
-    """Find a device's live advertisement before connecting to it.
+def looks_like_address(target: str) -> bool:
+    return bool(re.fullmatch(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}",
+                             (target or "").strip()))
 
-    Windows will not connect by address alone: WinRT needs a recent
-    advertisement for that address or it reports "was not found", even with
-    the device sitting right there. Scanning first and handing over the
-    resolved object is what makes connecting work.
-    """
+
+async def nearby(timeout: float = 10.0) -> list[dict]:
+    """Everything advertising right now."""
     from bleak import BleakScanner
 
     try:
-        return await BleakScanner.find_device_by_address(address, timeout=timeout)
+        seen = await BleakScanner.discover(timeout=timeout, return_adv=True)
     except Exception as exc:
-        log.debug("could not resolve %s: %s", address, exc)
-        return None
+        log.debug("scan failed: %s", exc)
+        return []
+    return [{"address": d.address, "name": adv.local_name or d.name or "",
+             "rssi": adv.rssi, "device": d}
+            for d, adv in seen.values()]
+
+
+async def resolve(target: str, timeout: float = 10.0):
+    """Find a live advertisement for a device, by address or by name.
+
+    Windows will not connect by address alone: WinRT needs a recent
+    advertisement or it reports "was not found" with the device sitting right
+    there. Matching by name matters too, because these chips use random
+    static addresses that change when the light is power-cycled, so a
+    previously noted address goes stale.
+    """
+    from bleak import BleakScanner
+
+    if looks_like_address(target):
+        try:
+            found = await BleakScanner.find_device_by_address(target,
+                                                              timeout=timeout)
+            if found is not None:
+                return found
+        except Exception as exc:
+            log.debug("address lookup failed for %s: %s", target, exc)
+
+    wanted = (target or "").strip().lower()
+    for entry in await nearby(timeout):
+        if entry["address"].lower() == wanted:
+            return entry["device"]
+        if wanted and wanted in entry["name"].lower():
+            return entry["device"]
+    return None
 
 
 async def describe(address: str, timeout: float = 15.0,
@@ -261,8 +293,30 @@ def _ask(question: str) -> bool:
         raise SystemExit(0)
 
 
-async def _hunt(address: str) -> None:
+async def _hunt(target: str) -> None:
     """Try every writable characteristic until the user sees the light react."""
+    print(f"Looking for {target}...")
+    device = await resolve(target)
+    if device is None:
+        print(f"\n{target} is not advertising right now.\n")
+        others = await nearby()
+        if others:
+            print("These are advertising instead:\n")
+            for entry in sorted(others, key=lambda e: -(e["rssi"] or -999)):
+                print(f"   {entry['address']}  {entry['rssi']:>4} dBm  "
+                      f"{entry['name'] or '(no name)'}")
+            print("\nThese chips use random addresses that change when the")
+            print("light is power-cycled, so an address noted earlier can go")
+            print("stale. Try the name instead, which survives that:\n")
+            print("   python -m crib.probe --hunt GATT--DEMO\n")
+            print("Or hunt one of the addresses above directly.")
+        else:
+            print("Nothing at all is advertising. Check Bluetooth is on.")
+        print("\nIf the light is connected to its app, close the app first -")
+        print("these boards stop advertising while something else holds them.")
+        return
+
+    address = device.address
     print(f"Connecting to {address}...")
     info = await describe(address)
     if not info["ok"]:
@@ -354,7 +408,7 @@ def _cli() -> None:
         asyncio.run(_dump(args[1:]))
     elif args and args[0] == "--hunt":
         if len(args) < 2:
-            sys.exit("usage: python -m crib.probe --hunt <address>")
+            sys.exit("usage: python -m crib.probe --hunt <address or name>")
         asyncio.run(_hunt(args[1]))
     elif args:
         sys.exit("usage: python -m crib.probe [--dump ADDR...] [--hunt ADDR]")

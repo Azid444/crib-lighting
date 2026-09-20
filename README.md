@@ -275,7 +275,7 @@ WS     /ws                  state pushed to every open phone
 pip install pytest pytest-asyncio && python -m pytest
 ```
 
-175 tests, no hardware, sound card, or Spotify account required. Fake devices cover the
+179 tests, no hardware, sound card, or Spotify account required. Fake devices cover the
 engine and API, the MR-Star packet encoding is asserted byte by byte, and the
 beat detector is verified against synthesised tracks at known tempos. The
 WASAPI loopback selection is tested against a simulated Windows device tree,
@@ -321,8 +321,14 @@ what you saw, then prints the exact config to use:
 
 ```powershell
 .venv\Scripts\python.exe -m crib.probe --hunt 8C:26:AA:BA:A3:3F
+.venv\Scripts\python.exe -m crib.probe --hunt GATT--DEMO
 .venv\Scripts\python.exe -m crib.probe --dump 8C:26:AA:BA:A3:3F
 ```
+
+Either an address or a name works. Prefer the name: these chips use random
+static addresses that change when the light is power-cycled, so an address
+noted earlier goes stale. If the device cannot be found, the tool lists what
+*is* advertising so you can spot it under a new address.
 
 **Older note on name matching.** These controllers are white-labelled
 and many advertise nothing that identifies them. The wizard lists every other
