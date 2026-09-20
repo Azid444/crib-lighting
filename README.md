@@ -155,6 +155,30 @@ So the app asks once and adapts:
 Either way the lights work. The `Auto` / `Mic` / `Spotify` selector on the
 phone lets you force one.
 
+## Playing through a Bluetooth soundbar
+
+If you pair the soundbar to the PC and play Spotify **from the PC**, loopback
+capture works with no cable and no Apple TV involved. Two things to know.
+
+**Bluetooth audio arrives late.** A2DP buffers 100-250ms. Loopback taps the
+audio *before* that hop, so uncompensated the lights fire up to a quarter of a
+second ahead of what you hear. Raise **Sync delay** on the phone until they
+line up — 150-200ms is typical. It is live, so you can slide it while a track
+is playing and watch it lock in.
+
+Nothing can make a live capture fire *early*, which is why the control only
+ever delays. Wired setups leave it at 0.
+
+**One Bluetooth radio, two jobs.** The PC would be streaming A2DP to the
+soundbar *and* driving the MR-Star over BLE at the same time. A2DP is
+bandwidth-hungry and the two can contend, showing up as stuttering on the TV
+backlight during loud passages. If that happens, a second USB Bluetooth
+dongle (~£10) separates them — or move the MR-Star onto its own adapter.
+
+Note this only helps if the music plays **from the PC**. Bluetooth audio flows
+source → sink, so pairing the soundbar to the PC does not let the PC hear what
+an Apple TV is sending.
+
 ## Getting Apple TV audio to the PC
 
 If Spotify's grid is not available to your account, the beats have to come
@@ -243,7 +267,7 @@ POST   /api/scene/{name}    bright | chill | movie | off
 POST   /api/effect          {"name":"sound"} or {"name":"rave","bpm":128}
 DELETE /api/effect          stop
 POST   /api/source          {"source":"auto"|"mic"|"spotify"}
-POST   /api/settings        {"sensitivity":1.4,"bpm":174,"gain":1.0}
+POST   /api/settings        {"sensitivity":1.4,"bpm":174,"delay_ms":180}
 GET    /api/audio/devices   input devices, to find your loopback
 GET    /api/spotify/login   one-time authorisation (open on the PC)
 POST   /api/spotify/{cmd}   play | pause | next | previous
@@ -256,12 +280,13 @@ WS     /ws                  state pushed to every open phone
 pip install pytest pytest-asyncio && python -m pytest
 ```
 
-79 tests, no hardware, sound card, or Spotify account required. Fake devices cover the
+94 tests, no hardware, sound card, or Spotify account required. Fake devices cover the
 engine and API, the MR-Star packet encoding is asserted byte by byte, and the
 beat detector is verified against synthesised tracks at known tempos. The
 WASAPI loopback selection is tested against a simulated Windows device tree,
 since it cannot run on Linux. Spotify's beat-grid timing is tested against a
-synthetic analysis, including seeking, pausing and track changes.
+synthetic analysis, including seeking, pausing and track changes. Sync delay
+is measured end to end: 10ms baseline, 229ms with a 200ms offset set.
 
 ## Troubleshooting
 
@@ -296,9 +321,14 @@ lights still react, just from sound rather than the grid.
 microphone access; loopback capture is unaffected, so leave `device: null` to
 use it. Check nothing else has the device open in exclusive mode.
 
+**Lights run ahead of the music.** Speaker lag. Raise **Sync delay** on the
+phone until they match — Bluetooth usually needs 150-200ms.
+
 **Lights lag during rave.** Bluetooth is the bottleneck. The MR-Star is capped
 at 10 commands/sec by design — pushing harder fills its buffer and makes it
-stutter rather than go faster.
+stutter rather than go faster. If you are *also* streaming audio over
+Bluetooth from the same PC, the two are competing for one radio; a second USB
+dongle fixes it.
 
 ## Security
 

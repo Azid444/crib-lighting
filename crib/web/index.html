@@ -130,6 +130,10 @@
     <input type="range" id="sens" min="1.05" max="2.5" step="0.05">
     <label>Rave tempo <span class="v" id="bpmv"></span></label>
     <input type="range" id="bpmr" min="60" max="200" step="1">
+    <label>Sync delay <span class="v" id="delv"></span></label>
+    <input type="range" id="del" min="0" max="500" step="10">
+    <div class="note">Bluetooth speakers lag 100–250&nbsp;ms behind. Raise this
+      until the lights land with the beat you hear; leave at 0 for wired.</div>
     <div class="note" id="srcnote"></div>
   </div>
 
@@ -199,9 +203,11 @@ function render(s) {
   if (!busy) {
     $('#sens').value = st.sensitivity;
     $('#bpmr').value = st.bpm;
+    $('#del').value = st.delay_ms;
   }
   $('#sensv').textContent = (+st.sensitivity).toFixed(2);
   $('#bpmv').textContent = Math.round(st.bpm) + ' BPM';
+  $('#delv').textContent = Math.round(st.delay_ms) + ' ms';
 
   $('#srcnote').textContent =
     !sp.configured ? 'Spotify not set up — using the sound card.'
@@ -291,7 +297,7 @@ function updateCard(l) {
 for (const b of document.querySelectorAll('[data-src]'))
   b.onclick = () => post('/source', {source: b.dataset.src});
 
-for (const [id, key] of [['sens','sensitivity'], ['bpmr','bpm']]) {
+for (const [id, key] of [['sens','sensitivity'], ['bpmr','bpm'], ['del','delay_ms']]) {
   const el = $('#' + id);
   el.onpointerdown = () => busy = true;
   el.onpointerup = () => busy = false;
@@ -299,6 +305,7 @@ for (const [id, key] of [['sens','sensitivity'], ['bpmr','bpm']]) {
   // Live label while dragging, without spamming the server.
   el.oninput = () => {
     if (id === 'sens') $('#sensv').textContent = (+el.value).toFixed(2);
+    else if (id === 'del') $('#delv').textContent = Math.round(el.value) + ' ms';
     else $('#bpmv').textContent = Math.round(el.value) + ' BPM';
   };
 }

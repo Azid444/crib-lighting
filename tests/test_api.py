@@ -153,3 +153,29 @@ def test_ui_has_spotify_and_settings_controls(client):
     html = client.get("/").text
     for part in ('id="np"', 'data-src="spotify"', 'id="sens"', 'id="playpause"'):
         assert part in html
+
+
+def test_sync_delay_is_settable(client):
+    s = client.post("/api/settings", json={"delay_ms": 220}).json()
+    assert s["settings"]["delay_ms"] == 220
+
+
+def test_sync_delay_is_bounded(client):
+    assert client.post("/api/settings", json={"delay_ms": -5}).status_code == 422
+    assert client.post("/api/settings", json={"delay_ms": 5000}).status_code == 422
+
+
+def test_delay_wraps_a_running_effect(client):
+    from crib import app as appmod
+    client.post("/api/effect", json={"name": "sound"})
+    client.post("/api/settings", json={"delay_ms": 200})
+    assert appmod.room._delayed is not None
+    assert appmod.room.engine.audio is appmod.room._delayed
+    # Back to zero unwraps again.
+    client.post("/api/settings", json={"delay_ms": 0})
+    assert appmod.room._delayed is None
+    client.delete("/api/effect")
+
+
+def test_ui_has_the_delay_slider(client):
+    assert 'id="del"' in client.get("/").text

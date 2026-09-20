@@ -123,12 +123,17 @@ class SettingsBody(BaseModel):
     sensitivity: float | None = Field(None, ge=1.02, le=3.0)
     bpm: float | None = Field(None, gt=20, le=300)
     gain: float | None = Field(None, gt=0, le=5)
+    delay_ms: float | None = Field(None, ge=0, le=1000)
 
 
 @app.post("/api/settings")
 async def settings(body: SettingsBody) -> dict:
     r = get_room()
-    r.update_settings(**body.model_dump(exclude_none=True))
+    values = body.model_dump(exclude_none=True)
+    r.update_settings(**values)
+    # A delay change has to rebuild the wrapper around the live source.
+    if "delay_ms" in values and r.engine.running:
+        await r.start_effect(r.engine.running)
     return r.snapshot()
 
 

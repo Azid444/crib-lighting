@@ -32,6 +32,11 @@ audio:
   device: null
   loopback: true      # false = always use the microphone instead
   sensitivity: 1.35   # lower = more beats detected, higher = only big hits
+  # Hold the lights back to match speaker lag. Capture happens before the
+  # audio leaves the PC, so anything downstream adds delay the lights do not
+  # have: Bluetooth 100-250ms, HDMI/eARC 30-120ms, wired ~0.
+  # Tune it live from the phone.
+  delay_ms: 0
 
 # Which signal drives the beat: auto | mic | spotify
 # auto uses Spotify's beat grid when your account still has access to it,

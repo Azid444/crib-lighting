@@ -7,6 +7,7 @@ import logging
 import yaml
 
 from .audio import Audio
+from .delay import Delayed
 from .spotify import SpotifyBeats, SpotifyClient
 from .drivers import Light, build
 from .effects import Engine
@@ -71,7 +72,10 @@ class Room:
             "sensitivity": float(audio_cfg.get("sensitivity", 1.35)),
             "bpm": float(config.get("bpm", 128.0)),
             "gain": float(audio_cfg.get("gain", 1.0)),
+            # Bluetooth speakers lag 100-250ms behind the loopback tap.
+            "delay_ms": float(audio_cfg.get("delay_ms", 0)),
         }
+        self._delayed: Delayed | None = None
 
     @classmethod
     def from_file(cls, path: str) -> "Room":
@@ -111,11 +115,32 @@ class Room:
                     # No input device is not fatal: the effect falls back to a
                     # fixed tempo rather than refusing to start.
                     log.warning("audio unavailable, using fixed tempo: %s", exc)
-            self.engine.audio = source
+            self.engine.audio = await self._with_delay(source)
         await self.engine.start(name, **opts)
+
+    async def _with_delay(self, source):
+        """Wrap a source so the lights land with the sound you hear."""
+        delay = self.settings["delay_ms"] / 1000.0
+        if delay <= 0:
+            if self._delayed is not None:
+                self._delayed.stop()
+                self._delayed = None
+            return source
+        # Reuse the wrapper when nothing changed, so counters do not reset.
+        if (self._delayed is None
+                or self._delayed.inner is not source
+                or self._delayed.delay_s != delay):
+            if self._delayed is not None:
+                self._delayed.stop()
+            self._delayed = Delayed(source, delay)
+        await self._delayed.start()
+        return self._delayed
 
     async def stop_effect(self) -> None:
         await self.engine.stop()
+        if self._delayed is not None:
+            self._delayed.stop()
+            self._delayed = None
         self.audio.stop()
 
     async def start_spotify(self) -> None:
@@ -136,6 +161,9 @@ class Room:
 
     async def disconnect_all(self) -> None:
         await self.engine.stop()
+        if self._delayed is not None:
+            self._delayed.stop()
+            self._delayed = None
         self.audio.stop()
         self.spotify_beats.stop()
         if self.spotify:
@@ -151,6 +179,10 @@ class Room:
         # Sensitivity is read by the detector on every block, so it takes
         # effect immediately without restarting the effect.
         self.audio.sensitivity = self.settings["sensitivity"]
+        # Changing the delay needs the wrapper rebuilt, which start_effect
+        # does; apply it live if an effect is already running.
+        if self._delayed is not None:
+            self._delayed.delay_s = max(0.0, self.settings["delay_ms"] / 1000.0)
 
     def set_source(self, name: str) -> None:
         if name not in ("auto", "mic", "spotify"):
