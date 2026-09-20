@@ -30,57 +30,49 @@ The only way to avoid an always-on machine entirely is a native iOS app
 (CoreBluetooth can do BLE, and raw sockets can do Tuya). That needs a Mac,
 Xcode, and re-signing every 7 days on a free Apple account.
 
-## Setup (Windows)
+## Setup
 
-Clone the repo, then right-click `setup_windows.ps1` → **Run with PowerShell**.
-Use **Run as Administrator** if you can — that lets it open the firewall port
-for you, which is the single most common reason the phone cannot connect.
-
-It creates the virtual environment, installs everything, copies
-`config.example.yaml` to `config.yaml`, lists your audio devices, and prints
-the URL to open on your phone.
-
-Doing it by hand instead:
+Paste this into PowerShell:
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-copy config.example.yaml config.yaml
+irm https://raw.githubusercontent.com/Azid444/crib-lighting/claude/room-lighting-unification-a1i9fy/bootstrap.ps1 | iex
 ```
 
-Then fill in `config.yaml`:
+That is the whole thing. It downloads the project, installs Python if you do
+not have it, installs the dependencies, opens the firewall, sets it to start
+at login, launches it, and opens a browser.
 
-**WLED strip** — just its IP. Set a DHCP reservation in your router so it
-never moves.
+Already downloaded it? Right-click **`setup.ps1`** → **Run with PowerShell**
+instead. Use **Run as Administrator** if you can — that lets it open the
+firewall port, which is the usual reason a phone cannot connect.
 
-**MR-Star** — find its MAC address:
+In the browser that opens, press **Scan for my lights**. It sweeps the network
+and Bluetooth, finds your devices, and writes `config.yaml` for you. Takes
+about fifteen seconds; have the lights powered on.
 
-```bash
-python -m crib.scan
-```
+You never run any of this again — it starts by itself from then on.
 
-Look for `MRSTAR`, `LEDnetWF`, `Triones`, or `LEDBLE`. These boards ship with
-one of two protocols; if the default (`triones`) does nothing, add
-`protocol: lednet` to that device in `config.yaml`.
+### The one thing it cannot find for you
 
-**Tuya wall switch** — a one-time key extraction, after which everything is
-local and the Tuya cloud is never contacted again:
-
-```bash
-python -m tinytuya wizard
-```
-
-That gives you the `device_id`, `local_key`, and IP.
-
-Run it by double-clicking **`start.bat`**, which prints your PC's IP and keeps
-a window open with the logs. To have it start automatically at login, run
-`install_autostart.ps1` once.
+Tuya wall switches are discovered on the network, but their **local key** is
+never broadcast — it only exists in your Tuya account. The wizard shows a box
+for it and tells you where to get it:
 
 ```powershell
-# or manually
-.venv\Scripts\python.exe -m crib.app
+.venv\Scripts\python.exe -m tinytuya wizard
 ```
+
+Leave it blank if you would rather not bother. Your strip and TV backlight
+still work, and the wall switch carries on being a normal wall switch.
+
+Spotify is the same idea: paste a Client ID into the wizard if you want
+now-playing and controls on your phone, or skip it.
+
+### Changing things later
+
+Everything worth tweaking — beat source, sensitivity, rave tempo, sync delay —
+is on the phone. To add a light you bought since, open `/setup` and scan
+again; your existing tuning is kept.
 
 ## On your iPhone
 
@@ -88,7 +80,8 @@ Open `http://<pc-ip>:8080`, then **Share → Add to Home Screen**. It launches
 fullscreen with its own icon — it behaves like a native app without ever
 going near the App Store.
 
-`start.bat` prints the address. Both devices must be on the same WiFi.
+Setup prints the address, and `start.bat` prints it again any time. Both
+devices must be on the same WiFi.
 
 If the page will not load, it is almost always the Windows firewall. Re-run
 `setup_windows.ps1` as Administrator, or add the rule yourself:
@@ -242,6 +235,8 @@ crib/
   drivers/     one class per protocol behind a common Light interface
     base.py    Light + Caps + per-device rate limiting
   audio.py     FFT bands, adaptive beat/transient detection
+  discover.py  finds lights over WiFi, BLE and Tuya broadcast
+  setup.py     writes config.yaml from what was discovered
   effects.py   frame loop at 20fps; effects return a target per light
   room.py      owns the lights, the engine, the audio, the scenes
   app.py       local REST + WebSocket API, serves the phone UI
@@ -280,13 +275,14 @@ WS     /ws                  state pushed to every open phone
 pip install pytest pytest-asyncio && python -m pytest
 ```
 
-94 tests, no hardware, sound card, or Spotify account required. Fake devices cover the
+125 tests, no hardware, sound card, or Spotify account required. Fake devices cover the
 engine and API, the MR-Star packet encoding is asserted byte by byte, and the
 beat detector is verified against synthesised tracks at known tempos. The
 WASAPI loopback selection is tested against a simulated Windows device tree,
 since it cannot run on Linux. Spotify's beat-grid timing is tested against a
 synthetic analysis, including seeking, pausing and track changes. Sync delay
-is measured end to end: 10ms baseline, 229ms with a 200ms offset set.
+is measured end to end: 10ms baseline, 229ms with a 200ms offset set. The
+first-run wizard is covered over HTTP, from empty folder to running lights.
 
 ## Troubleshooting
 
@@ -294,6 +290,9 @@ is measured end to end: 10ms baseline, 229ms with a 200ms offset set.
 above. Check both devices are on the same WiFi, and that your network is set
 to *Private* rather than *Public* in Windows settings, since the firewall rule
 only covers private networks.
+
+**The scan finds nothing.** Lights must be powered on and the PC on the same
+WiFi as them. Bluetooth devices must not be paired in Windows settings.
 
 **MR-Star never connects.** `bleak` uses the Windows WinRT Bluetooth stack,
 which needs Windows 10 or newer and a BLE-capable adapter (most built-in WiFi

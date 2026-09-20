@@ -4,8 +4,6 @@ from __future__ import annotations
 import asyncio
 import logging
 
-import yaml
-
 from .audio import Audio
 from .delay import Delayed
 from .spotify import SpotifyBeats, SpotifyClient
@@ -79,8 +77,14 @@ class Room:
 
     @classmethod
     def from_file(cls, path: str) -> "Room":
-        with open(path) as fh:
-            return cls(yaml.safe_load(fh))
+        # A missing config is normal on first run: the setup wizard writes it.
+        from .setup import load_config
+
+        return cls(load_config(path))
+
+    @property
+    def needs_setup(self) -> bool:
+        return not self.lights
 
     # -- beat sources ------------------------------------------------------
     def pick_source(self):

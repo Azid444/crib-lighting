@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Crib Setup</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0a0a0f">
+<style>
+  :root{--bg:#0a0a0f;--card:#16161f;--line:#26262f;--text:#f2f2f7;
+        --dim:#8a8a99;--accent:#7c5cff;--ok:#30d158;--warn:#ffd60a}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:16px/1.45 -apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+    padding:max(env(safe-area-inset-top),20px) 16px 40px;max-width:640px;margin:0 auto}
+  h1{font-size:28px;margin:0 0 4px;letter-spacing:-.02em}
+  .sub{color:var(--dim);font-size:14px;margin-bottom:22px}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;
+     color:var(--dim);margin:26px 0 10px}
+  button{font:inherit;color:var(--text);background:var(--card);
+    border:1px solid var(--line);border-radius:14px;padding:16px;
+    min-height:56px;cursor:pointer;width:100%;transition:transform .08s}
+  button:active{transform:scale(.98)}
+  button:disabled{opacity:.5;cursor:default}
+  .primary{border:none;background:linear-gradient(100deg,#7c5cff,#ff2d55);
+           font-weight:700;font-size:17px}
+  .dev{background:var(--card);border:1px solid var(--line);border-radius:14px;
+       padding:14px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start}
+  .dev .ic{font-size:22px;line-height:1.2}
+  .dev .b{flex:1;min-width:0}
+  .dev .n{font-weight:600}
+  .dev .d{color:var(--dim);font-size:13px;margin-top:2px}
+  .tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;
+       margin-top:6px;font-weight:600}
+  .tag.ok{background:#12351f;color:var(--ok)}
+  .tag.need{background:#3a3315;color:var(--warn)}
+  input[type=text]{width:100%;font:inherit;color:var(--text);background:#0e0e15;
+    border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:8px}
+  .note{color:var(--dim);font-size:13px;margin-top:8px;line-height:1.5}
+  .note a{color:var(--accent)}
+  details{background:var(--card);border:1px solid var(--line);
+          border-radius:14px;padding:14px;margin-top:10px}
+  summary{cursor:pointer;font-weight:600}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line);
+        border-top-color:var(--accent);border-radius:50%;
+        animation:spin .7s linear infinite;vertical-align:-2px;margin-right:8px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .msg{border-radius:12px;padding:12px;margin:12px 0;font-size:14px;display:none}
+  .msg.err{background:#3a1520;border:1px solid #6b2436;display:block}
+  .msg.good{background:#12351f;border:1px solid #1f5c33;display:block}
+</style>
+</head>
+<body>
+  <h1>Set up your room</h1>
+  <div class="sub">Finds your lights automatically. Nothing to type unless it asks.</div>
+
+  <button class="primary" id="scan">Scan for my lights</button>
+  <div class="msg" id="msg"></div>
+
+  <div id="results"></div>
+
+  <div id="finish" style="display:none">
+    <h2>Spotify (optional)</h2>
+    <details>
+      <summary>Show track info and controls on my phone</summary>
+      <div class="note">
+        Create an app at
+        <a href="https://developer.spotify.com/dashboard" target="_blank">developer.spotify.com/dashboard</a>,
+        add <code>http://127.0.0.1:8080/api/spotify/callback</code> as a redirect
+        URI, and paste the Client ID here. Skip it if you cannot be bothered —
+        everything else works without it.
+      </div>
+      <input type="text" id="spotify" placeholder="Spotify Client ID" autocomplete="off">
+    </details>
+
+    <h2></h2>
+    <button class="primary" id="save">Save and start</button>
+  </div>
+
+<script>
+const $ = s => document.querySelector(s);
+let found = [];
+
+function show(text, kind) {
+  const m = $('#msg');
+  m.className = 'msg ' + kind;
+  m.innerHTML = text;
+}
+
+const ICONS = {wled: '🔆', mrstar: '📺', tuya: '💡'};
+
+function render() {
+  const box = $('#results');
+  box.innerHTML = '';
+  if (!found.length) return;
+
+  const h = document.createElement('h2');
+  h.textContent = 'Found ' + found.length + ' device' + (found.length > 1 ? 's' : '');
+  box.append(h);
+
+  found.forEach((d, i) => {
+    const needsKey = d.driver === 'tuya' && !d.local_key;
+    const el = document.createElement('div');
+    el.className = 'dev';
+    el.innerHTML = `
+      <div class="ic">${ICONS[d.driver] || '💡'}</div>
+      <div class="b">
+        <div class="n"></div>
+        <div class="d"></div>
+        <span class="tag ${needsKey ? 'need' : 'ok'}">
+          ${needsKey ? 'needs a local key' : 'ready'}</span>
+      </div>`;
+    el.querySelector('.n').textContent = d.name || d.driver;
+    el.querySelector('.d').textContent = d._detail || '';
+
+    if (needsKey) {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'Tuya local key';
+      input.autocomplete = 'off';
+      input.oninput = () => { found[i].local_key = input.value.trim(); };
+      const note = document.createElement('div');
+      note.className = 'note';
+      note.innerHTML = 'Tuya never broadcasts this, so it has to come from your '
+        + 'account. Run <code>python -m tinytuya wizard</code> in this folder and '
+        + 'paste the key it prints for this device. '
+        + '<b>Or just leave it blank</b> — your other lights will still work and '
+        + 'the wall switch keeps working as a normal switch.';
+      el.querySelector('.b').append(input, note);
+    }
+    box.append(el);
+  });
+  $('#finish').style.display = 'block';
+}
+
+$('#scan').onclick = async () => {
+  const btn = $('#scan');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Scanning network and Bluetooth…';
+  show('This takes about 15 seconds. Make sure your lights are powered on.', 'good');
+  try {
+    const res = await fetch('/api/setup/scan', {method: 'POST'});
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    found = data.found;
+    if (!found.length) {
+      show('Nothing found. Check the lights are on and that this PC is on the '
+        + 'same WiFi. Bluetooth devices need to be unpaired in Windows settings.',
+        'err');
+    } else {
+      const c = data.counts;
+      show(`Found ${c.wled} WLED, ${c.mrstar} Bluetooth, ${c.tuya} Tuya.`, 'good');
+    }
+    render();
+  } catch (e) {
+    show('Scan failed: ' + (e.message || e), 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = found.length ? 'Scan again' : 'Scan for my lights';
+  }
+};
+
+$('#save').onclick = async () => {
+  const btn = $('#save');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Saving…';
+  try {
+    const res = await fetch('/api/setup/save', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({
+        devices: found,
+        spotify_client_id: $('#spotify').value.trim(),
+      }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    show('Saved. Taking you to your lights…', 'good');
+    setTimeout(() => location.href = '/', 800);
+  } catch (e) {
+    show('Could not save: ' + (e.message || e), 'err');
+    btn.disabled = false;
+    btn.textContent = 'Save and start';
+  }
+};
+
+// If a config already exists, offer the normal UI instead.
+fetch('/api/setup/state').then(r => r.json()).then(s => {
+  if (!s.needs_setup) {
+    show('Already set up — <a href="/">open your lights</a>. '
+       + 'Scanning again will replace the current devices.', 'good');
+  }
+});
+</script>
+</body>
+</html>

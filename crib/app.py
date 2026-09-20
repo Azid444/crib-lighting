@@ -84,6 +84,67 @@ async def scene(name: str) -> dict:
     return r.snapshot()
 
 
+# -- first-run setup -------------------------------------------------------
+# Held between the scan and the save so the user can fill in a Tuya key
+# without us having to scan the network again.
+_found: list[dict] = []
+
+
+@app.get("/api/setup/state")
+async def setup_state() -> dict:
+    r = get_room()
+    return {
+        "needs_setup": r.needs_setup,
+        "configured": [l.snapshot() for l in r.lights.values()],
+        "found": _found,
+        "spotify_configured": r.spotify is not None,
+    }
+
+
+@app.post("/api/setup/scan")
+async def setup_scan() -> dict:
+    """Look for lights on the network and over Bluetooth."""
+    from .discover import discover_all
+
+    global _found
+    results = await discover_all(timeout=10.0)
+    _found = [d for group in results.values() for d in group]
+    return {"found": _found, "counts": {k: len(v) for k, v in results.items()}}
+
+
+class SaveBody(BaseModel):
+    devices: list[dict] = Field(default_factory=list)
+    spotify_client_id: str = ""
+
+
+@app.post("/api/setup/save")
+async def setup_save(body: SaveBody) -> dict:
+    """Write config.yaml and bring the lights up without a restart."""
+    from .setup import build_config, load_config, save_config
+
+    global room
+    existing = load_config(CONFIG)
+    # Keep tuning the user already did; replace only the device list.
+    existing.pop("devices", None)
+    config = build_config(body.devices, body.spotify_client_id, existing)
+    try:
+        save_config(CONFIG, config)
+    except Exception as exc:
+        raise HTTPException(500, f"could not write {CONFIG}: {exc}")
+
+    if room is not None:
+        await room.disconnect_all()
+    room = Room(config)
+    await room.connect_all()
+    await room.start_spotify()
+    return {"saved": True, "state": room.snapshot()}
+
+
+@app.get("/setup")
+async def setup_page() -> FileResponse:
+    return FileResponse(os.path.join(WEB, "setup.html"))
+
+
 @app.get("/api/audio/devices")
 async def audio_devices() -> dict:
     """Input devices, so you can pick the loopback from the phone."""
@@ -217,7 +278,10 @@ app.mount("/static", StaticFiles(directory=WEB), name="static")
 
 
 @app.get("/")
-async def index() -> FileResponse:
+async def index():
+    # Nothing configured yet means this is a first run: go straight to setup.
+    if room is not None and room.needs_setup:
+        return RedirectResponse("/setup")
     return FileResponse(os.path.join(WEB, "index.html"))
 
 
