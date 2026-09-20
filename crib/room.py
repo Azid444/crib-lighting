@@ -7,6 +7,7 @@ import logging
 import yaml
 
 from .audio import Audio
+from .spotify import SpotifyBeats, SpotifyClient
 from .drivers import Light, build
 from .effects import Engine
 
@@ -48,10 +49,79 @@ class Room:
         )
         self.engine = Engine(self.lights, audio=self.audio)
 
+        # Spotify is optional and independent of the lights: it supplies
+        # now-playing metadata (and a beat grid, where the account still has
+        # access to it) for whatever device is actually playing.
+        sp = config.get("spotify", {}) or {}
+        self.spotify: SpotifyClient | None = None
+        if sp.get("client_id"):
+            self.spotify = SpotifyClient(
+                sp["client_id"],
+                redirect_uri=sp.get(
+                    "redirect_uri",
+                    "http://127.0.0.1:8080/api/spotify/callback",
+                ),
+                token_path=sp.get("token_path", "spotify_token.json"),
+            )
+        self.spotify_beats = SpotifyBeats(self.spotify)
+        # auto | mic | spotify
+        self.source_pref = str(config.get("source", "auto"))
+        # Live-tweakable from the phone; effects read these at start.
+        self.settings = {
+            "sensitivity": float(audio_cfg.get("sensitivity", 1.35)),
+            "bpm": float(config.get("bpm", 128.0)),
+            "gain": float(audio_cfg.get("gain", 1.0)),
+        }
+
     @classmethod
     def from_file(cls, path: str) -> "Room":
         with open(path) as fh:
             return cls(yaml.safe_load(fh))
+
+    # -- beat sources ------------------------------------------------------
+    def pick_source(self):
+        """Which signal drives the sound effect.
+
+        Spotify only wins when it actually has a beat grid; with the analysis
+        endpoint deprecated for newer apps that is often not the case, so
+        `auto` quietly falls back to whatever the sound card hears.
+        """
+        if self.source_pref == "mic":
+            return self.audio
+        if self.source_pref == "spotify":
+            return self.spotify_beats
+        if self.spotify_beats.running and self.spotify_beats.has_grid:
+            return self.spotify_beats
+        return self.audio
+
+    async def start_effect(self, name: str, **opts) -> None:
+        """Start an effect, bringing up whichever beat source it needs."""
+        effect_cls = None
+        from .effects import EFFECTS
+        effect_cls = EFFECTS.get(name)
+        # Phone-set defaults, unless the caller overrode them explicitly.
+        opts.setdefault("bpm", self.settings["bpm"])
+        opts.setdefault("gain", self.settings["gain"])
+        if effect_cls is not None and effect_cls.needs_audio:
+            source = self.pick_source()
+            if source is self.audio:
+                try:
+                    self.audio.start()
+                except Exception as exc:
+                    # No input device is not fatal: the effect falls back to a
+                    # fixed tempo rather than refusing to start.
+                    log.warning("audio unavailable, using fixed tempo: %s", exc)
+            self.engine.audio = source
+        await self.engine.start(name, **opts)
+
+    async def stop_effect(self) -> None:
+        await self.engine.stop()
+        self.audio.stop()
+
+    async def start_spotify(self) -> None:
+        """Begin polling now-playing. Safe to call repeatedly."""
+        if self.spotify and self.spotify.authorized:
+            await self.spotify_beats.start()
 
     async def connect_all(self) -> None:
         """Connect everything, tolerating devices that are off or asleep."""
@@ -67,9 +137,25 @@ class Room:
     async def disconnect_all(self) -> None:
         await self.engine.stop()
         self.audio.stop()
+        self.spotify_beats.stop()
+        if self.spotify:
+            await self.spotify.close()
         await asyncio.gather(
             *(l.disconnect() for l in self.lights.values()), return_exceptions=True
         )
+
+    def update_settings(self, **values) -> None:
+        for key, value in values.items():
+            if key in self.settings and value is not None:
+                self.settings[key] = float(value)
+        # Sensitivity is read by the detector on every block, so it takes
+        # effect immediately without restarting the effect.
+        self.audio.sensitivity = self.settings["sensitivity"]
+
+    def set_source(self, name: str) -> None:
+        if name not in ("auto", "mic", "spotify"):
+            raise ValueError(f"unknown source {name!r}")
+        self.source_pref = name
 
     async def apply_scene(self, name: str) -> None:
         if name not in SCENES:
@@ -91,4 +177,15 @@ class Room:
             "effect": self.engine.running,
             "scenes": sorted(SCENES),
             "audio": self.audio.snapshot(),
+            "spotify": {
+                "configured": self.spotify is not None,
+                "authorized": bool(self.spotify and self.spotify.authorized),
+                "analysis_allowed": self.spotify.analysis_allowed if self.spotify else None,
+                **self.spotify_beats.snapshot(),
+            },
+            "source": self.source_pref,
+            "settings": self.settings,
+            "active_source": (
+                "spotify" if self.pick_source() is self.spotify_beats else "mic"
+            ),
         }

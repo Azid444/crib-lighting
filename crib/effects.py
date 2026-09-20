@@ -207,14 +207,10 @@ class Engine:
             raise ValueError(f"unknown effect {name!r}; have {sorted(EFFECTS)}")
         await self.stop()
         effect = EFFECTS[name](**opts)
-        if effect.needs_audio and self.audio is not None:
+        if effect.needs_audio:
+            # Room decides and starts the beat source (mic, line-in or
+            # Spotify's grid); the effect only reads counters off it.
             effect.audio = self.audio
-            try:
-                self.audio.start()
-            except Exception as exc:
-                # No loopback device? Run anyway; the effect falls back to a
-                # fixed tempo rather than refusing to start.
-                log.warning("audio unavailable, using fixed tempo: %s", exc)
         self.current = effect
         self._task = asyncio.create_task(self._run())
 
@@ -226,8 +222,6 @@ class Engine:
             except asyncio.CancelledError:
                 pass
             self._task = None
-        if self.current is not None and self.current.needs_audio and self.audio:
-            self.audio.stop()
         self.current = None
 
     async def _run(self) -> None:

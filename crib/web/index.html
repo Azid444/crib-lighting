@@ -64,6 +64,26 @@
     width:44px;height:36px;padding:0;border:1px solid var(--line);
     border-radius:10px;background:none;flex:none;
   }
+  .np{background:var(--card);border:1px solid var(--line);border-radius:14px;
+      padding:12px;display:none;gap:12px;align-items:center;margin-bottom:10px}
+  .np.on{display:flex}
+  .np img{width:52px;height:52px;border-radius:8px;flex:none;background:#000}
+  .np .meta{flex:1;min-width:0}
+  .np .t{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .np .a{color:var(--dim);font-size:13px;overflow:hidden;
+         text-overflow:ellipsis;white-space:nowrap}
+  .np .ctl{display:flex;gap:6px;flex:none}
+  .np .ctl button{min-height:40px;padding:8px 12px;border-radius:10px;font-size:15px}
+  .seg{display:flex;gap:6px;background:var(--card);border:1px solid var(--line);
+       border-radius:12px;padding:4px}
+  .seg button{flex:1;min-height:40px;padding:8px;border:none;background:none;
+              border-radius:9px;font-size:14px;color:var(--dim)}
+  .seg button[aria-pressed="true"]{background:#221b45;color:var(--text);font-weight:600}
+  .set{background:var(--card);border:1px solid var(--line);border-radius:14px;
+       padding:14px;margin-top:10px}
+  .set label{display:block;font-size:13px;color:var(--dim);margin-bottom:2px}
+  .set .v{color:var(--text);font-weight:600}
+  .note{color:var(--dim);font-size:12px;margin-top:8px;line-height:1.45}
   .err{background:#3a1520;border:1px solid #6b2436;border-radius:12px;
        padding:12px;margin-bottom:12px;font-size:14px;display:none}
 </style>
@@ -72,6 +92,19 @@
   <h1>Crib</h1>
   <div class="sub" id="sub">connecting…</div>
   <div class="err" id="err"></div>
+
+  <div class="np" id="np">
+    <img id="npart" alt="">
+    <div class="meta">
+      <div class="t" id="nptitle"></div>
+      <div class="a" id="npartist"></div>
+    </div>
+    <div class="ctl">
+      <button id="prev">⏮</button>
+      <button id="playpause">⏯</button>
+      <button id="next">⏭</button>
+    </div>
+  </div>
 
   <h2>Scenes</h2>
   <div class="grid" id="scenes"></div>
@@ -84,6 +117,20 @@
       <span id="bpm">–</span>
       <span class="bar"><i id="lvl"></i></span>
     </div>
+  </div>
+
+  <h2>Beat source</h2>
+  <div class="seg" id="src">
+    <button data-src="auto" aria-pressed="false">Auto</button>
+    <button data-src="mic" aria-pressed="false">Mic / line-in</button>
+    <button data-src="spotify" aria-pressed="false">Spotify</button>
+  </div>
+  <div class="set">
+    <label>Beat sensitivity <span class="v" id="sensv"></span></label>
+    <input type="range" id="sens" min="1.05" max="2.5" step="0.05">
+    <label>Rave tempo <span class="v" id="bpmv"></span></label>
+    <input type="range" id="bpmr" min="60" max="200" step="1">
+    <div class="note" id="srcnote"></div>
   </div>
 
   <h2>Lights</h2>
@@ -134,6 +181,36 @@ function render(s) {
   // Effect buttons (rave lives in the markup; the rest are generated once)
   $('#rave').setAttribute('aria-pressed', s.effect === 'rave');
   $('#sound').setAttribute('aria-pressed', s.effect === 'sound');
+
+  // Now playing (whatever device Spotify is using -- we never take it over)
+  const sp = s.spotify || {}, tr = sp.track;
+  $('#np').classList.toggle('on', !!tr);
+  if (tr) {
+    $('#nptitle').textContent = tr.title || '';
+    $('#npartist').textContent =
+      (tr.artist || '') + (tr.device ? ' · ' + tr.device : '');
+    if (tr.art && $('#npart').src !== tr.art) $('#npart').src = tr.art;
+  }
+
+  for (const b of document.querySelectorAll('[data-src]'))
+    b.setAttribute('aria-pressed', s.source === b.dataset.src);
+
+  const st = s.settings || {};
+  if (!busy) {
+    $('#sens').value = st.sensitivity;
+    $('#bpmr').value = st.bpm;
+  }
+  $('#sensv').textContent = (+st.sensitivity).toFixed(2);
+  $('#bpmv').textContent = Math.round(st.bpm) + ' BPM';
+
+  $('#srcnote').textContent =
+    !sp.configured ? 'Spotify not set up — using the sound card.'
+    : !sp.authorized ? 'Spotify not connected. Open /api/spotify/login on the PC.'
+    : sp.analysis_allowed === false
+      ? 'Spotify gives track info only (beat grid not available for this app), '
+        + 'so beats come from the sound card.'
+    : sp.has_grid ? 'Synced to Spotify’s beat grid.'
+    : 'Connected to Spotify.';
 
   const a = s.audio || {};
   $('#meter').classList.toggle('on', s.effect === 'sound');
@@ -210,6 +287,28 @@ function updateCard(l) {
   const rng = el.querySelector('input[type=range]');
   if (rng && !busy) rng.value = l.brightness;
 }
+
+for (const b of document.querySelectorAll('[data-src]'))
+  b.onclick = () => post('/source', {source: b.dataset.src});
+
+for (const [id, key] of [['sens','sensitivity'], ['bpmr','bpm']]) {
+  const el = $('#' + id);
+  el.onpointerdown = () => busy = true;
+  el.onpointerup = () => busy = false;
+  el.onchange = () => post('/settings', {[key]: +el.value});
+  // Live label while dragging, without spamming the server.
+  el.oninput = () => {
+    if (id === 'sens') $('#sensv').textContent = (+el.value).toFixed(2);
+    else $('#bpmv').textContent = Math.round(el.value) + ' BPM';
+  };
+}
+
+for (const [id, action] of [['prev','previous'], ['playpause','play'], ['next','next']])
+  $('#' + id).onclick = () => {
+    const playing = state?.spotify?.track?.playing;
+    const a = (id === 'playpause' && playing) ? 'pause' : action;
+    post('/spotify/' + a);
+  };
 
 $('#sound').onclick = () =>
   state?.effect === 'sound' ? api('/effect', {method:'DELETE'})

@@ -95,3 +95,61 @@ def test_sound_effect_starts_without_a_sound_card(client):
 def test_ui_exposes_sound_controls(client):
     html = client.get("/").text
     assert "SOUND REACTIVE" in html and 'id="meter"' in html
+
+
+# --- source selection and Spotify ----------------------------------------
+
+def test_state_reports_source_and_spotify(client):
+    s = client.get("/api/state").json()
+    assert s["source"] == "auto"
+    assert s["active_source"] == "mic"          # no Spotify grid configured
+    assert s["spotify"]["configured"] is False
+
+
+def test_source_can_be_switched(client):
+    assert client.post("/api/source", json={"source": "mic"}).json()["source"] == "mic"
+    s = client.post("/api/source", json={"source": "spotify"}).json()
+    assert s["source"] == "spotify" and s["active_source"] == "spotify"
+
+
+def test_unknown_source_is_rejected(client):
+    assert client.post("/api/source", json={"source": "telepathy"}).status_code == 400
+
+
+def test_switching_source_rebinds_a_running_effect(client):
+    client.post("/api/effect", json={"name": "sound"})
+    s = client.post("/api/source", json={"source": "spotify"}).json()
+    assert s["effect"] == "sound", "effect should survive a source switch"
+    client.delete("/api/effect")
+
+
+def test_spotify_endpoints_fail_clearly_when_unconfigured(client):
+    assert client.get("/api/spotify/login").status_code == 400
+    assert client.post("/api/spotify/play").status_code == 400
+
+
+def test_spotify_callback_reports_denial(client):
+    r = client.get("/api/spotify/callback", params={"error": "access_denied"})
+    assert r.status_code == 400 and "declined" in r.text
+
+
+def test_settings_are_tweakable_from_the_phone(client):
+    s = client.post("/api/settings", json={"sensitivity": 1.8, "bpm": 174}).json()
+    assert s["settings"]["sensitivity"] == 1.8 and s["settings"]["bpm"] == 174
+
+
+def test_settings_are_validated(client):
+    assert client.post("/api/settings", json={"sensitivity": 99}).status_code == 422
+    assert client.post("/api/settings", json={"bpm": 5}).status_code == 422
+
+
+def test_sensitivity_reaches_the_detector(client):
+    from crib import app as appmod
+    client.post("/api/settings", json={"sensitivity": 2.0})
+    assert appmod.room.audio.sensitivity == 2.0
+
+
+def test_ui_has_spotify_and_settings_controls(client):
+    html = client.get("/").text
+    for part in ('id="np"', 'data-src="spotify"', 'id="sens"', 'id="playpause"'):
+        assert part in html

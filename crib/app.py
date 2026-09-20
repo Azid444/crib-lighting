@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -27,6 +27,7 @@ async def lifespan(app: FastAPI):
     global room
     room = Room.from_file(CONFIG)
     await room.connect_all()
+    await room.start_spotify()
     yield
     await room.disconnect_all()
 
@@ -105,7 +106,7 @@ async def effect(body: EffectBody) -> dict:
     opts = body.model_dump(exclude_none=True)
     name = opts.pop("name")
     try:
-        await r.engine.start(name, **opts)
+        await r.start_effect(name, **opts)
     except ValueError as exc:
         raise HTTPException(404, str(exc))
     return r.snapshot()
@@ -114,7 +115,84 @@ async def effect(body: EffectBody) -> dict:
 @app.delete("/api/effect")
 async def stop_effect() -> dict:
     r = get_room()
-    await r.engine.stop()
+    await r.stop_effect()
+    return r.snapshot()
+
+
+class SettingsBody(BaseModel):
+    sensitivity: float | None = Field(None, ge=1.02, le=3.0)
+    bpm: float | None = Field(None, gt=20, le=300)
+    gain: float | None = Field(None, gt=0, le=5)
+
+
+@app.post("/api/settings")
+async def settings(body: SettingsBody) -> dict:
+    r = get_room()
+    r.update_settings(**body.model_dump(exclude_none=True))
+    return r.snapshot()
+
+
+class SourceBody(BaseModel):
+    source: str
+
+
+@app.post("/api/source")
+async def set_source(body: SourceBody) -> dict:
+    """Choose what drives the beat: auto, mic or spotify."""
+    r = get_room()
+    try:
+        r.set_source(body.source)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    # Re-bind a running effect to the newly chosen source.
+    if r.engine.running:
+        await r.start_effect(r.engine.running)
+    return r.snapshot()
+
+
+# -- Spotify ---------------------------------------------------------------
+# Authorise once in a browser on the PC: Spotify only permits loopback
+# redirect URIs over plain http, so the callback cannot land on the phone.
+
+@app.get("/api/spotify/login")
+async def spotify_login():
+    r = get_room()
+    if r.spotify is None:
+        raise HTTPException(400, "no spotify.client_id in config.yaml")
+    return RedirectResponse(r.spotify.auth_url())
+
+
+@app.get("/api/spotify/callback")
+async def spotify_callback(code: str | None = None, error: str | None = None):
+    r = get_room()
+    if error:
+        return HTMLResponse(f"<h2>Spotify declined: {error}</h2>", status_code=400)
+    if not code or r.spotify is None:
+        raise HTTPException(400, "missing authorization code")
+    try:
+        await r.spotify.exchange(code)
+    except Exception as exc:
+        return HTMLResponse(f"<h2>Authorization failed</h2><p>{exc}</p>",
+                            status_code=400)
+    await r.start_spotify()
+    return HTMLResponse(
+        "<h2>Spotify connected.</h2>"
+        "<p>You can close this tab and go back to your phone.</p>"
+    )
+
+
+@app.post("/api/spotify/{action}")
+async def spotify_command(action: str) -> dict:
+    """Transport control. Acts on whichever device is already playing."""
+    r = get_room()
+    if r.spotify is None or not r.spotify.authorized:
+        raise HTTPException(400, "Spotify not connected")
+    try:
+        await r.spotify.command(action)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+    except Exception as exc:
+        raise HTTPException(502, f"Spotify rejected {action}: {exc}")
     return r.snapshot()
 
 

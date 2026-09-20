@@ -1,9 +1,9 @@
 # crib-lighting
 
-One app for every light in my room. No cloud, no accounts, no vendor apps.
+One app for every light in my room, synced to whatever Spotify is playing.
 A small service runs on my PC, talks to each light on its own protocol, and
-puts them all behind one web app on my iPhone — plus a rave mode that listens
-to whatever the PC is playing.
+puts them all behind one web app on my iPhone — with a rave mode that follows
+the music and never moves playback off the device it is already on.
 
 | Light | Protocol | Notes |
 |---|---|---|
@@ -112,6 +112,68 @@ Both the kick and treble detectors are **relative** — they compare against the
 track's own recent average, so they work at any volume rather than needing a
 threshold tuned per song.
 
+## Spotify
+
+Set `spotify.client_id` in `config.yaml` (create an app at
+[developer.spotify.com/dashboard](https://developer.spotify.com/dashboard),
+add `http://127.0.0.1:8080/api/spotify/callback` as a redirect URI — no client
+secret needed, it uses PKCE). Then, **in a browser on the PC**, open:
+
+```
+http://127.0.0.1:8080/api/spotify/login
+```
+
+That has to happen on the PC, not the phone: Spotify only allows plain-http
+redirects to loopback addresses, so the callback cannot land on your phone.
+It is a one-time step — the refresh token is saved and renewed automatically.
+
+After that the phone shows the current track and art, and the ⏮ ⏯ ⏭ buttons
+control it.
+
+### Playback stays where it is
+
+Spotify Connect *moves* playback between devices. This never does that. It
+only reads playback state and sends transport commands, so if the Apple TV
+app is playing, the sound stays on your TV and the PC is never made the
+active device.
+
+### Why Spotify alone cannot drive the beat
+
+Beat-accurate sync needs Spotify's `/audio-analysis` endpoint, which gives the
+exact timestamp of every beat and bar. Spotify **deprecated it for apps
+created after 2024-11-27** — new client IDs get a 403. Apps that already had
+access kept it.
+
+So the app asks once and adapts:
+
+- **Access granted** → beats come straight from the grid, sample-accurate, and
+  no audio capture is needed at all. `python -m crib.app` logs which it got,
+  and the phone shows "Synced to Spotify's beat grid".
+- **403** → Spotify still gives you track info and controls, and beats come
+  from the sound card instead.
+
+Either way the lights work. The `Auto` / `Mic` / `Spotify` selector on the
+phone lets you force one.
+
+## Getting Apple TV audio to the PC
+
+If Spotify's grid is not available to your account, the beats have to come
+from sound the PC can actually hear. Your Apple TV plays to the TV, so tap a
+copy of it:
+
+| Route | Cost | Notes |
+|---|---|---|
+| TV or soundbar **line-out / headphone** → PC line-in | ~£8 cable | Best option. Add a USB audio adapter (~£10) if the PC has no input jack |
+| TV **optical out** → USB capture with optical in | ~£15 | If the TV has no analogue out |
+| **Microphone** | free | Set `loopback: false`. Works well when it is loud; picks up talking |
+
+None of these change what the Apple TV is doing — you are only tapping a copy
+of the signal. Set the captured device with `python -m crib.audio` and put its
+index in `config.yaml`.
+
+If the music is coming *from the PC* instead, none of this is needed — see
+below.
+
 ### Hearing what the PC plays
 
 On Windows this needs **no extra software**. Windows exposes WASAPI loopback,
@@ -180,7 +242,11 @@ POST   /api/light/{id}      {"on":true,"brightness":200,"color":[255,0,0]}
 POST   /api/scene/{name}    bright | chill | movie | off
 POST   /api/effect          {"name":"sound"} or {"name":"rave","bpm":128}
 DELETE /api/effect          stop
+POST   /api/source          {"source":"auto"|"mic"|"spotify"}
+POST   /api/settings        {"sensitivity":1.4,"bpm":174,"gain":1.0}
 GET    /api/audio/devices   input devices, to find your loopback
+GET    /api/spotify/login   one-time authorisation (open on the PC)
+POST   /api/spotify/{cmd}   play | pause | next | previous
 WS     /ws                  state pushed to every open phone
 ```
 
@@ -190,11 +256,12 @@ WS     /ws                  state pushed to every open phone
 pip install pytest pytest-asyncio && python -m pytest
 ```
 
-54 tests, no hardware and no sound card required. Fake devices cover the
+79 tests, no hardware, sound card, or Spotify account required. Fake devices cover the
 engine and API, the MR-Star packet encoding is asserted byte by byte, and the
 beat detector is verified against synthesised tracks at known tempos. The
 WASAPI loopback selection is tested against a simulated Windows device tree,
-since it cannot run on Linux.
+since it cannot run on Linux. Spotify's beat-grid timing is tested against a
+synthetic analysis, including seeking, pausing and track changes.
 
 ## Troubleshooting
 
@@ -215,6 +282,15 @@ finds the device but colours do nothing, you have the other protocol, so set
 **Tuya switch stops responding after a while.** Tuya devices drop idle
 connections. The driver keeps a persistent socket and reconnects, but if the
 device changed IP, update it — a DHCP reservation prevents this.
+
+**Spotify says "not connected" on the phone.** The authorisation has to be
+done in a browser on the PC, at `http://127.0.0.1:8080/api/spotify/login`.
+Check the redirect URI registered on your Spotify app matches
+`config.yaml` exactly, including the port.
+
+**Spotify shows the track but the lights ignore the beat.** Your app does not
+have `/audio-analysis` access (see above). Capture the audio instead — the
+lights still react, just from sound rather than the grid.
 
 **Sound mode says "no audio input".** Windows privacy settings can block
 microphone access; loopback capture is unaffected, so leave `device: null` to

@@ -1,6 +1,9 @@
 # Contains your Tuya local key and device IPs. Never commit it.
 config.yaml
 
+# Spotify refresh token.
+spotify_token.json
+
 __pycache__/
 *.py[cod]
 .venv/
