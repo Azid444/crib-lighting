@@ -30,14 +30,23 @@ The only way to avoid an always-on machine entirely is a native iOS app
 (CoreBluetooth can do BLE, and raw sockets can do Tuya). That needs a Mac,
 Xcode, and re-signing every 7 days on a free Apple account.
 
-## Setup
+## Setup (Windows)
 
-```bash
-git clone <this repo> && cd crib-lighting
-python3 -m venv .venv
-. .venv/bin/activate          # Windows: .venv\Scripts\activate
+Clone the repo, then right-click `setup_windows.ps1` → **Run with PowerShell**.
+Use **Run as Administrator** if you can — that lets it open the firewall port
+for you, which is the single most common reason the phone cannot connect.
+
+It creates the virtual environment, installs everything, copies
+`config.example.yaml` to `config.yaml`, lists your audio devices, and prints
+the URL to open on your phone.
+
+Doing it by hand instead:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
-cp config.example.yaml config.yaml
+copy config.example.yaml config.yaml
 ```
 
 Then fill in `config.yaml`:
@@ -64,10 +73,13 @@ python -m tinytuya wizard
 
 That gives you the `device_id`, `local_key`, and IP.
 
-Run it:
+Run it by double-clicking **`start.bat`**, which prints your PC's IP and keeps
+a window open with the logs. To have it start automatically at login, run
+`install_autostart.ps1` once.
 
-```bash
-python -m crib.app
+```powershell
+# or manually
+.venv\Scripts\python.exe -m crib.app
 ```
 
 ## On your iPhone
@@ -76,9 +88,18 @@ Open `http://<pc-ip>:8080`, then **Share → Add to Home Screen**. It launches
 fullscreen with its own icon — it behaves like a native app without ever
 going near the App Store.
 
-Find your PC's IP with `ipconfig` (Windows) or `ip addr` (Linux/macOS). Both
-devices must be on the same WiFi. If the page will not load, your PC firewall
-is almost certainly blocking port 8080.
+`start.bat` prints the address. Both devices must be on the same WiFi.
+
+If the page will not load, it is almost always the Windows firewall. Re-run
+`setup_windows.ps1` as Administrator, or add the rule yourself:
+
+```powershell
+New-NetFirewallRule -DisplayName "crib-lighting" -Direction Inbound `
+    -LocalPort 8080 -Protocol TCP -Action Allow -Profile Private
+```
+
+Set a DHCP reservation for your PC in your router so the address never
+changes.
 
 ## Sound-reactive rave
 
@@ -91,24 +112,29 @@ Both the kick and treble detectors are **relative** — they compare against the
 track's own recent average, so they work at any volume rather than needing a
 threshold tuned per song.
 
-By default it listens to your **microphone**. To react to what the PC is
-*playing* instead, you need a loopback device:
+### Hearing what the PC plays
 
-- **Windows** — WASAPI loopback is built in. Run `python -m crib.audio` and
-  look for a "Stereo Mix" or loopback entry; if there is none, install
-  [VB-CABLE](https://vb-audio.com/Cable/).
-- **macOS** — install [BlackHole](https://existential.audio/blackhole/) and
-  create a Multi-Output Device so you can still hear the audio.
-- **Linux** — use the PulseAudio/PipeWire `.monitor` source for your output.
+On Windows this needs **no extra software**. Windows exposes WASAPI loopback,
+which captures an output device directly, so leaving `device: null` in
+`config.yaml` makes it listen to your speakers automatically — no Stereo Mix,
+no VB-CABLE. Nothing changes about how your audio sounds.
 
-Then list inputs and set the index in `config.yaml`:
+To pick a specific device instead:
 
-```bash
-python -m crib.audio
+```powershell
+.venv\Scripts\python.exe -m crib.audio
 ```
 
-If no audio device is available, sound mode **falls back to a fixed 128 BPM
-rave** rather than failing — the button always does something.
+That lists every input plus every loopback-capable output; put the index in
+`config.yaml`. Set `loopback: false` to use the microphone instead, which
+reacts to the room rather than the PC — better if the music is coming from a
+phone or a speaker rather than the PC itself.
+
+If no device can be opened at all, sound mode **falls back to a fixed 128 BPM
+rave** rather than failing, so the button always does something.
+
+`sensitivity` tunes the beat detector: lower catches more beats, higher only
+the big hits. 1.35 is a reasonable default.
 
 ## Effects and scenes
 
@@ -164,9 +190,39 @@ WS     /ws                  state pushed to every open phone
 pip install pytest pytest-asyncio && python -m pytest
 ```
 
-47 tests, no hardware and no sound card required. Fake devices cover the
+54 tests, no hardware and no sound card required. Fake devices cover the
 engine and API, the MR-Star packet encoding is asserted byte by byte, and the
-beat detector is verified against synthesised tracks at known tempos.
+beat detector is verified against synthesised tracks at known tempos. The
+WASAPI loopback selection is tested against a simulated Windows device tree,
+since it cannot run on Linux.
+
+## Troubleshooting
+
+**Phone cannot load the page.** Windows firewall, nearly every time — see
+above. Check both devices are on the same WiFi, and that your network is set
+to *Private* rather than *Public* in Windows settings, since the firewall rule
+only covers private networks.
+
+**MR-Star never connects.** `bleak` uses the Windows WinRT Bluetooth stack,
+which needs Windows 10 or newer and a BLE-capable adapter (most built-in WiFi
+cards have one; a £10 USB dongle fixes an older desktop). Make sure the device
+is **not paired** in Windows Bluetooth settings — these controllers are not
+meant to be paired and Windows holding the connection stops this from opening
+it. If `python -m crib.scan` finds nothing, the adapter is the problem; if it
+finds the device but colours do nothing, you have the other protocol, so set
+`protocol: lednet` on it.
+
+**Tuya switch stops responding after a while.** Tuya devices drop idle
+connections. The driver keeps a persistent socket and reconnects, but if the
+device changed IP, update it — a DHCP reservation prevents this.
+
+**Sound mode says "no audio input".** Windows privacy settings can block
+microphone access; loopback capture is unaffected, so leave `device: null` to
+use it. Check nothing else has the device open in exclusive mode.
+
+**Lights lag during rave.** Bluetooth is the bottleneck. The MR-Star is capped
+at 10 commands/sec by design — pushing harder fills its buffer and makes it
+stutter rather than go faster.
 
 ## Security
 

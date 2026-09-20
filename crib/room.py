@@ -44,6 +44,7 @@ class Room:
         self.audio = Audio(
             device=audio_cfg.get("device"),
             sensitivity=float(audio_cfg.get("sensitivity", 1.35)),
+            loopback=bool(audio_cfg.get("loopback", True)),
         )
         self.engine = Engine(self.lights, audio=self.audio)
 

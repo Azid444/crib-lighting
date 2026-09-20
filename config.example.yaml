@@ -26,5 +26,9 @@ devices:
 # input. To react to what the PC is *playing* rather than the room, point this
 # at a loopback device -- run `python -m crib.audio` to list them by index.
 audio:
+  # Leave unset: on Windows this auto-captures whatever your speakers are
+  # playing via WASAPI loopback, with no virtual audio cable needed. Set it to
+  # an index from `python -m crib.audio` to force a specific device.
   device: null
+  loopback: true      # false = always use the microphone instead
   sensitivity: 1.35   # lower = more beats detected, higher = only big hits

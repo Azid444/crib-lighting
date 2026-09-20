@@ -32,11 +32,14 @@ class Audio:
         blocksize: int = 1024,
         device: int | str | None = None,
         sensitivity: float = 1.35,
+        loopback: bool = True,
     ) -> None:
         self.samplerate = samplerate
         self.blocksize = blocksize
         self.device = device
         self.sensitivity = sensitivity
+        self.loopback = loopback
+        self.source: str | None = None   # what we ended up listening to
 
         self.bass = self.mid = self.treble = 0.0  # 0..1, smoothed
         self.level = 0.0
@@ -131,6 +134,7 @@ class Audio:
             return {
                 "running": self.running,
                 "error": self.error,
+                "source": self.source,
                 "level": round(self.level, 4),
                 "bass": round(self.bass, 4),
                 "mid": round(self.mid, 4),
@@ -141,6 +145,50 @@ class Audio:
             }
 
     # -- sound card --------------------------------------------------------
+    def _candidates(self, sd) -> list[tuple[str, dict]]:
+        """Stream options to try, best first.
+
+        On Windows, WASAPI can capture an output device directly, so we can
+        hear what the PC is playing with no virtual cable installed. Falling
+        back to the microphone keeps the feature working everywhere else.
+        Kept separate from start() so the selection logic is testable.
+        """
+        if self.device is not None:  # an explicit choice always wins
+            return [(
+                f"configured device {self.device}",
+                dict(device=self.device, channels=1, samplerate=self.samplerate),
+            )]
+
+        out: list[tuple[str, dict]] = []
+        if self.loopback:
+            try:
+                for host in sd.query_hostapis():
+                    if "WASAPI" not in str(host.get("name", "")).upper():
+                        continue
+                    index = host.get("default_output_device", -1)
+                    if index is None or index < 0:
+                        continue
+                    info = sd.query_devices(index)
+                    out.append((
+                        f"WASAPI loopback: {info.get('name', index)}",
+                        dict(
+                            device=index,
+                            # Loopback captures the output's own channels.
+                            channels=min(2, int(info.get("max_output_channels") or 2)),
+                            samplerate=int(info.get("default_samplerate")
+                                           or self.samplerate),
+                            extra_settings=sd.WasapiSettings(loopback=True),
+                        ),
+                    ))
+            except Exception as exc:
+                log.debug("no WASAPI loopback available: %s", exc)
+
+        out.append((
+            "default microphone",
+            dict(device=None, channels=1, samplerate=self.samplerate),
+        ))
+        return out
+
     def start(self) -> None:
         if self.running:
             return
@@ -158,21 +206,28 @@ class Audio:
             except Exception:
                 log.exception("audio analysis failed")
 
-        try:
-            self._stream = sd.InputStream(
-                samplerate=self.samplerate,
-                blocksize=self.blocksize,
-                channels=1,
-                dtype="float32",
-                device=self.device,
-                callback=callback,
-            )
-            self._stream.start()
-        except Exception as exc:
-            self.error = str(exc)
-            raise RuntimeError(f"could not open audio input: {exc}") from exc
-        self.running = True
-        self.error = None
+        problems = []
+        for label, kwargs in self._candidates(sd):
+            try:
+                stream = sd.InputStream(
+                    blocksize=self.blocksize, dtype="float32",
+                    callback=callback, **kwargs,
+                )
+                stream.start()
+            except Exception as exc:
+                problems.append(f"{label}: {exc}")
+                continue
+            self._stream = stream
+            self.source = label
+            # The FFT maps bins to Hz, so it must use the rate we actually got.
+            self.samplerate = int(kwargs["samplerate"])
+            self.running = True
+            self.error = None
+            log.info("listening via %s at %d Hz", label, self.samplerate)
+            return
+
+        self.error = "; ".join(problems) or "no audio input found"
+        raise RuntimeError(f"could not open audio input: {self.error}")
 
     def stop(self) -> None:
         if self._stream is not None:
@@ -183,20 +238,39 @@ class Audio:
                 log.exception("closing audio stream")
             self._stream = None
         self.running = False
+        self.source = None
 
 
 def list_devices() -> list[dict]:
-    """Every input the OS offers, so the user can find their loopback."""
+    """Inputs, plus Windows outputs that can be captured via WASAPI loopback."""
     import sounddevice as sd
 
+    wasapi = {
+        i for i, h in enumerate(sd.query_hostapis())
+        if "WASAPI" in str(h.get("name", "")).upper()
+    }
     out = []
     for i, d in enumerate(sd.query_devices()):
-        if d["max_input_channels"] > 0:
-            out.append({"index": i, "name": d["name"],
-                        "channels": d["max_input_channels"]})
+        inputs = d.get("max_input_channels", 0)
+        can_loop = d.get("max_output_channels", 0) > 0 and d.get("hostapi") in wasapi
+        if inputs > 0 or can_loop:
+            out.append({
+                "index": i,
+                "name": d.get("name", "?"),
+                "channels": inputs,
+                "loopback": bool(can_loop and not inputs),
+            })
     return out
 
 
 if __name__ == "__main__":
-    for d in list_devices():
-        print(f"{d['index']:>3}  {d['name']}")
+    try:
+        devices = list_devices()
+    except Exception as exc:
+        raise SystemExit(f"Could not list audio devices: {exc}")
+    print(f"{'idx':>4}  {'kind':<10}  name")
+    for d in devices:
+        kind = "loopback" if d["loopback"] else "input"
+        print(f"{d['index']:>4}  {kind:<10}  {d['name']}")
+    print("\nLeave `device` unset in config.yaml to auto-pick WASAPI loopback.")
+    print("Set it to an index above to force a specific device.")
